@@ -986,9 +986,49 @@
           `;
         } else if (groups.length > 0) {
           for (const g of groups) {
-            const pct = g.percentage !== undefined ? g.percentage : 100;
-            const color = getColor(pct);
-            const countdown = formatCountdown(g.resetTime);
+            // 解析 5小时与周额度对象 (支持新结构与旧结构平滑兼容)
+            const fiveHourObj = g.fiveHour || {
+              percentage: g.percentage !== undefined ? g.percentage : 100,
+              resetTime: g.resetTime || ""
+            };
+            const weeklyObj = g.weekly;
+
+            const fhPct = (fiveHourObj.percentage !== undefined && fiveHourObj.percentage !== null) ? fiveHourObj.percentage : 100;
+            const fhColor = getColor(fhPct);
+            const fhCountdown = formatCountdown(fiveHourObj.resetTime);
+
+            let weeklyHtml = "";
+            if (weeklyObj && weeklyObj.percentage !== undefined && weeklyObj.percentage !== null) {
+              const wkPct = weeklyObj.percentage;
+              const wkColor = getColor(wkPct);
+              const wkCountdown = formatCountdown(weeklyObj.resetTime);
+              weeklyHtml = `
+                <div style="border-top: 1px solid rgba(255, 255, 255, 0.05); margin: 8px 0; padding-top: 8px;"></div>
+                <div class="limit-row">
+                  <div>
+                    <div class="limit-label">Weekly Limit Remaining</div>
+                    <div class="limit-sub">周窗口重置: ${wkCountdown ? wkCountdown : '已就绪'}</div>
+                  </div>
+                  <div class="limit-value-box">
+                    <span class="limit-pct" style="color: ${wkColor};">${wkPct}%</span>
+                    <div class="ring-indicator" style="border-color: ${wkColor};"></div>
+                  </div>
+                </div>
+              `;
+            } else {
+              weeklyHtml = `
+                <div style="border-top: 1px solid rgba(255, 255, 255, 0.05); margin: 8px 0; padding-top: 8px;"></div>
+                <div class="limit-row">
+                  <div>
+                    <div class="limit-label">Weekly Limit Remaining</div>
+                    <div class="limit-sub">周窗口: 暂不可用 (单窗口回退模式)</div>
+                  </div>
+                  <div class="limit-value-box">
+                    <span class="limit-pct" style="color: var(--text-muted); font-size: 13px;">暂不可用</span>
+                  </div>
+                </div>
+              `;
+            }
 
             html += `
               <div class="group-section">
@@ -999,13 +1039,14 @@
                 <div class="limit-row">
                   <div>
                     <div class="limit-label">Five Hour Limit Remaining</div>
-                    <div class="limit-sub">重置倒计时: ${countdown ? countdown : '已就绪'}</div>
+                    <div class="limit-sub">重置倒计时: ${fhCountdown ? fhCountdown : '已就绪'}</div>
                   </div>
                   <div class="limit-value-box">
-                    <span class="limit-pct" style="color: ${color};">${pct}%</span>
-                    <div class="ring-indicator" style="border-color: ${color};"></div>
+                    <span class="limit-pct" style="color: ${fhColor};">${fhPct}%</span>
+                    <div class="ring-indicator" style="border-color: ${fhColor};"></div>
                   </div>
                 </div>
+                ${weeklyHtml}
               </div>
             `;
           }
@@ -1123,8 +1164,17 @@
     function formatCountdown(resetTimeStr) {
       if (!resetTimeStr) return "";
       try {
-        const resetDate = new Date(resetTimeStr);
+        let resetDate;
+        if (typeof resetTimeStr === "number") {
+          resetDate = new Date(resetTimeStr > 1e11 ? resetTimeStr : resetTimeStr * 1000);
+        } else if (!isNaN(Number(resetTimeStr)) && resetTimeStr.trim() !== "") {
+          const num = Number(resetTimeStr);
+          resetDate = new Date(num > 1e11 ? num : num * 1000);
+        } else {
+          resetDate = new Date(resetTimeStr);
+        }
         const diffMs = resetDate.getTime() - Date.now();
+        if (isNaN(diffMs)) return "";
         if (diffMs <= 0) return "即将重置";
         const totalMinutes = Math.floor(diffMs / 60000);
         const hours = Math.floor(totalMinutes / 60);

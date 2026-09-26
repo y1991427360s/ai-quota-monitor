@@ -45,6 +45,8 @@ WX_CORP_ID = os.environ.get("WX_CORP_ID", "YOUR_WECHAT_CORP_ID")
 WX_SECRET = os.environ.get("WX_SECRET", "YOUR_WECHAT_SECRET")
 WX_AGENT_ID = 1000002
 
+ANTIGRAVITY_DEBUG = os.environ.get("ANTIGRAVITY_DEBUG", "false").lower() in ("true", "1", "yes")
+
 # 临时存放 PKCE code_verifier 的内存字典 {state: (code_verifier, timestamp)}
 PKCE_CACHE = {}
 
@@ -67,7 +69,21 @@ def load_quota_cache():
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                # 兼容旧缓存格式升级
+                if isinstance(data, dict):
+                    for email, entry in data.items():
+                        if isinstance(entry, dict) and "groups" in entry:
+                            for g in entry["groups"]:
+                                if "fiveHour" not in g:
+                                    old_pct = g.get("percentage")
+                                    old_rst = g.get("resetTime", "")
+                                    g["fiveHour"] = {
+                                        "percentage": old_pct,
+                                        "resetTime": old_rst
+                                    } if old_pct is not None else None
+                                    g["weekly"] = None
+                return data
         except Exception:
             pass
     return {}
@@ -141,6 +157,161 @@ def fetch_single_probe(access_token: str, project_id: str = "aicode-consumers"):
             
         return g_rem, g_rst, c_rem, c_rst
 
+def parse_quota_summary(summary_data: dict):
+    """
+    解析 retrieveUserQuotaSummary 真实返回结构：
+    groups: [
+      {
+        "displayName": "Gemini Models",
+        "description": "...",
+        "buckets": [
+          { "bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.508, "resetTime": "..." },
+          { "bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.616, "resetTime": "..." }
+        ]
+      }
+    ]
+    """
+    raw_groups = summary_data.get("groups", [])
+    if not raw_groups:
+        return None
+
+    parsed_groups = []
+    for g in raw_groups:
+        display_name = g.get("displayName") or g.get("groupName") or "AI Models"
+        description = g.get("description") or ""
+        
+        # 兼容并精准识别子池名字
+        if "Gemini" in display_name:
+            sub_title = "Gemini 3.8 Flash (主力) / 3.1 Pro"
+        elif "Claude" in display_name or "GPT" in display_name or "3p" in display_name:
+            sub_title = "Claude Sonnet 4.6 / Opus / GPT-OSS"
+        else:
+            sub_title = description or display_name
+
+        five_hour_info = None
+        weekly_info = None
+
+        buckets = g.get("buckets", [])
+        for b in buckets:
+            b_id = str(b.get("bucketId", "")).lower()
+            window = str(b.get("window", "")).lower()
+            disp = str(b.get("displayName", "")).lower()
+
+            rem_frac = b.get("remainingFraction")
+            # 严格注意：0.0 是合法数值，表示额度耗尽！
+            if rem_frac is not None:
+                try:
+                    pct = max(0, min(100, int(round(float(rem_frac) * 100))))
+                except (ValueError, TypeError):
+                    pct = None
+            else:
+                pct = None
+
+            reset_time = b.get("resetTime") or ""
+
+            # 判断是 5 小时窗口还是周窗口
+            is_weekly = (
+                "week" in b_id or "7d" in b_id or "seven" in b_id or
+                "weekly" in window or "week" in window or "7d" in window or
+                "week" in disp
+            )
+            is_five_hour = (
+                "5h" in b_id or "five" in b_id or
+                "5h" in window or "five_hour" in window or "five" in window or
+                "5-hour" in disp or "five hour" in disp
+            )
+
+            if is_weekly:
+                weekly_info = {
+                    "percentage": pct if pct is not None else 100,
+                    "resetTime": reset_time
+                }
+            elif is_five_hour:
+                five_hour_info = {
+                    "percentage": pct if pct is not None else 100,
+                    "resetTime": reset_time
+                }
+            else:
+                # 若未明确标注，若已经有 5H 则归为 weekly，反之亦然
+                if five_hour_info is None:
+                    five_hour_info = {
+                        "percentage": pct if pct is not None else 100,
+                        "resetTime": reset_time
+                    }
+                elif weekly_info is None:
+                    weekly_info = {
+                        "percentage": pct if pct is not None else 100,
+                        "resetTime": reset_time
+                    }
+
+        # 兼容传统字段：percentage 优先取 5H，次之 weekly
+        legacy_pct = None
+        legacy_rst = ""
+        if five_hour_info is not None and five_hour_info["percentage"] is not None:
+            legacy_pct = five_hour_info["percentage"]
+            legacy_rst = five_hour_info["resetTime"]
+        elif weekly_info is not None and weekly_info["percentage"] is not None:
+            legacy_pct = weekly_info["percentage"]
+            legacy_rst = weekly_info["resetTime"]
+
+        parsed_groups.append({
+            "groupName": display_name,
+            "subTitle": sub_title,
+            "percentage": legacy_pct if legacy_pct is not None else 100,
+            "resetTime": legacy_rst,
+            "fiveHour": five_hour_info,
+            "weekly": weekly_info
+        })
+
+    return parsed_groups if parsed_groups else None
+
+def fetch_quota_summary(access_token: str, project_id: str = "aicode-consumers"):
+    """
+    优先调用 retrieveUserQuotaSummary 获取 grouped quota summary (5H + Weekly)
+    尝试探测优先级：
+    1. cloudcode-pa.googleapis.com (带 project 参数)
+    2. cloudcode-pa.googleapis.com (空参数体 {}) -> 实际官方无 403 阻断的轻量调用
+    3. daily-cloudcode-pa.sandbox.googleapis.com (测试沙箱备选)
+    """
+    endpoints_to_try = [
+        ("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", {"project": project_id} if project_id else {}),
+        ("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", {}),
+        ("https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary", {"project": project_id} if project_id else {}),
+    ]
+
+    last_error = None
+    for url, payload in endpoints_to_try:
+        try:
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "User-Agent": "antigravity/1.104.0"
+            }
+            body = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=body, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+                parsed = parse_quota_summary(res)
+                if parsed:
+                    if ANTIGRAVITY_DEBUG:
+                        print(f"[Antigravity Debug] retrieveUserQuotaSummary succeeded via {url} (payload: {list(payload.keys())})")
+                        for g in parsed:
+                            fh = g.get('fiveHour') or {}
+                            wk = g.get('weekly') or {}
+                            print(f"  Group: {g.get('groupName')} | 5H: {fh.get('percentage')}% ({fh.get('resetTime')}) | Weekly: {wk.get('percentage')}% ({wk.get('resetTime')})")
+                    return parsed
+        except urllib.error.HTTPError as e:
+            last_error = f"HTTP {e.code}"
+            if ANTIGRAVITY_DEBUG:
+                print(f"[Antigravity Debug] retrieveUserQuotaSummary attempt failed: {url} (HTTP {e.code})")
+        except Exception as e:
+            last_error = str(e)
+            if ANTIGRAVITY_DEBUG:
+                print(f"[Antigravity Debug] retrieveUserQuotaSummary attempt error: {url} ({e})")
+
+    print(f"[Antigravity] retrieveUserQuotaSummary failed: {last_error}")
+    return None
+
 def fetch_grouped_quota(email: str, access_token: str, project_id: str = "aicode-consumers", force_refresh: bool = False):
     cache = load_quota_cache()
     now = time.time()
@@ -149,9 +320,23 @@ def fetch_grouped_quota(email: str, access_token: str, project_id: str = "aicode
         c_entry = cache[email]
         if now - c_entry.get("timestamp", 0) < 180:
             return c_entry.get("groups", [])
-            
-    best_g_rem, best_g_rst = 0.0, ""
-    best_c_rem, best_c_rst = 0.0, ""
+
+    # 第一级：尝试 retrieveUserQuotaSummary 获取真正的 5H + Weekly 额度
+    summary_groups = fetch_quota_summary(access_token, project_id)
+    if summary_groups:
+        cache[email] = {
+            "timestamp": now,
+            "groups": summary_groups
+        }
+        save_quota_cache(cache)
+        return summary_groups
+
+    # 第二级：retrieveUserQuotaSummary 失败，自动回退到现有 fetchAvailableModels (5H 探测，Weekly 为 null)
+    if ANTIGRAVITY_DEBUG:
+        print(f"[Antigravity Debug] Falling back to fetchAvailableModels for {email}")
+        
+    best_g_rem, best_g_rst = None, ""
+    best_c_rem, best_c_rst = None, ""
     
     probe_projects = [project_id] if project_id else ["aicode-consumers", ""]
     success = False
@@ -159,32 +344,47 @@ def fetch_grouped_quota(email: str, access_token: str, project_id: str = "aicode
     for p in probe_projects:
         try:
             g_rem, g_rst, c_rem, c_rst = fetch_single_probe(access_token, p)
-            if g_rem > best_g_rem:
-                best_g_rem, best_g_rst = g_rem, g_rst
-            if c_rem > best_c_rem:
-                best_c_rem, best_c_rst = c_rem, c_rst
+            if g_rem is not None:
+                if best_g_rem is None or g_rem > best_g_rem:
+                    best_g_rem, best_g_rst = g_rem, g_rst
+            if c_rem is not None:
+                if best_c_rem is None or c_rem > best_c_rem:
+                    best_c_rem, best_c_rst = c_rem, c_rst
             success = True
-        except Exception:
+        except Exception as e:
+            if ANTIGRAVITY_DEBUG:
+                print(f"[Antigravity Debug] fetchAvailableModels probe failed for project '{p}': {e}")
             continue
             
+    # 第三级：两个接口均失败，若有缓存则返回最近一次成功数据
     if not success and email in cache:
         return cache[email].get("groups", [])
         
-    g_final_pct = int(best_g_rem * 100) if best_g_rem > 0 else 0
-    c_final_pct = int(best_c_rem * 100) if best_c_rem > 0 else 0
+    g_final_pct = int(round(best_g_rem * 100)) if best_g_rem is not None else 0
+    c_final_pct = int(round(best_c_rem * 100)) if best_c_rem is not None else 0
     
     groups = [
         {
             "groupName": "Gemini Models",
             "subTitle": "Gemini 3.8 Flash (主力) / 3.1 Pro",
             "percentage": g_final_pct,
-            "resetTime": best_g_rst
+            "resetTime": best_g_rst,
+            "fiveHour": {
+                "percentage": g_final_pct,
+                "resetTime": best_g_rst
+            },
+            "weekly": None
         },
         {
             "groupName": "Claude and GPT models",
             "subTitle": "Claude Sonnet 4.6 / Opus / GPT-OSS",
             "percentage": c_final_pct,
-            "resetTime": best_c_rst
+            "resetTime": best_c_rst,
+            "fiveHour": {
+                "percentage": c_final_pct,
+                "resetTime": best_c_rst
+            },
+            "weekly": None
         }
     ]
     

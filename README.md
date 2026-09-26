@@ -15,8 +15,13 @@
     - 支持手动一键发送企业微信测试报警卡片。
   - **Google Antigravity 配额看板**：
     - 多账号切换与额度聚合。
-    - Claude / Gemini 官方额度剩余比例与重置倒计时。
-    - OAuth 授权一键刷新与登录管理。
+    - **双窗口限额监控**：原生支持 **Five Hour Limit (5小时滚动额度)** 与 **Weekly Limit (7天周额度)** 实时消耗百分比与精确重置倒计时。
+    - **双模型池独立划分**：分别追踪 Gemini Models (Gemini 3.8 Flash / 3.1 Pro) 及 Claude and GPT models (Claude Sonnet / Opus / GPT-OSS) 的共享配额。
+    - **高可用三级智能 Fallback 架构**：
+      1. 首选 Antigravity 官方内部 `retrieveUserQuotaSummary` 接口直接获取服务端原生 5H + Weekly 聚合配额；
+      2. 若接口不可用或账号未下发周配额，自动平滑回退至 `fetchAvailableModels` 保持 5 小时额度精准刷新；
+      3. 双接口异常时自动回退本地最近一次有效快照缓存，确保看板高可用不闪断。
+    - 严格识别 `0%` 耗尽合法状态，OAuth 授权一键刷新与登录管理。
 - **自动化守护与主动告警**：
   - 常驻后台守护进程，定时自动轮询 sub2api 状态与网关健康度。
   - 遇到 429 Rate Limit、账号认证失效或服务异常时，通过企业微信自建应用实时推送报警卡片。
