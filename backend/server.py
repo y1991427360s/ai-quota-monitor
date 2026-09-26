@@ -22,6 +22,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 自动加载当前目录及上级目录的 .env 文件
+for env_path in [".env", "../.env", os.path.join(os.path.dirname(__file__), ".env"), os.path.join(os.path.dirname(__file__), "..", ".env")]:
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip().strip("'\"")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
 CONFIG_DIR = os.path.expanduser("~/.config/antigravity-usage")
 TOKENS_FILE = os.path.join(CONFIG_DIR, "tokens.json")
 CACHE_FILE = os.path.join(CONFIG_DIR, "quota_cache.json")
