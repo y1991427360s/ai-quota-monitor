@@ -715,10 +715,10 @@
         const email = item.email || "未命名账号";
         const isActive = Boolean(item.isActive);
         const isError = item.status === "error";
+        const isUnavailable = item.status === "unavailable";
         const isLimited = item.status === "limited";
-        const pct = item.five_hour_remaining !== undefined ? item.five_hour_remaining : 100;
-        const color = getColor(pct);
-        const countdown = formatCountdown(item.five_hour_reset);
+        const isStale = Boolean(item.stale);
+        const fetchedAt = item.fetched_at || item.updated_at || "";
 
         html += `
           <div class="account-card ${isActive ? 'active-account' : ''}">
@@ -727,6 +727,7 @@
                 <div class="account-email">${email}</div>
                 <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
                   ChatGPT ${(item.plan || 'Plus').toUpperCase()} · 个人会员
+                  ${fetchedAt ? `<span style="margin-left: 6px; opacity: 0.8;">更新: ${fetchedAt.split(' ')[1] || fetchedAt}</span>` : ''}
                 </div>
               </div>
               <span class="badge ${isLimited ? 'badge-danger' : (isActive ? 'badge-active' : 'badge-normal')}">
@@ -741,42 +742,145 @@
               ${item.error || 'Token 可能已失效，请重新授权'}
             </div>
           `;
+        } else if (isUnavailable) {
+          html += `
+            <div style="padding: 12px; background: rgba(245, 158, 11, 0.1); border-radius: 8px; color: var(--warning); font-size: 12px; margin: 10px 0;">
+              ${item.error || '当前无法获取 Codex 实时额度'}
+            </div>
+          `;
         } else {
+          if (isStale) {
+            html += `
+              <div style="padding: 6px 10px; background: rgba(245, 158, 11, 0.12); border-radius: 6px; color: var(--warning); font-size: 11px; margin-bottom: 8px;">
+                ⚠ 当前展示历史快照缓存 (${item.error || '接口请求中'})
+              </div>
+            `;
+          }
+
+          // 1. 主 Codex 共享额度
+          const rl = item.rate_limits || {};
+          const fh = rl.five_hour || (item.five_hour_remaining !== undefined && item.five_hour_remaining !== null ? {
+            remaining_percent: item.five_hour_remaining,
+            reset_at: item.five_hour_reset
+          } : null);
+
+          const wk = rl.weekly || (item.seven_day_remaining !== undefined && item.seven_day_remaining !== null ? {
+            remaining_percent: item.seven_day_remaining,
+            reset_at: item.seven_day_reset
+          } : null);
+
           html += `
             <div class="group-section">
               <div class="group-title">
-                <span>Codex / GPT-4o / GPT-5 配额</span>
+                <span>Codex 共享额度</span>
               </div>
-              
+          `;
+
+          let hasSharedWindow = false;
+
+          // 5小时窗口行
+          if (fh && fh.remaining_percent !== undefined && fh.remaining_percent !== null) {
+            hasSharedWindow = true;
+            const pct = fh.remaining_percent;
+            const color = getColor(pct);
+            const countdown = formatCountdown(fh.reset_at);
+            html += `
               <div class="limit-row">
                 <div>
                   <div class="limit-label">Five Hour Limit Remaining</div>
-                  <div class="limit-sub">5小时窗口重置: ${countdown ? countdown : '额度充沛就绪'}</div>
+                  <div class="limit-sub">5小时窗口重置: ${countdown ? countdown : '已就绪'}</div>
                 </div>
                 <div class="limit-value-box">
                   <span class="limit-pct" style="color: ${color};">${pct}%</span>
                   <div class="ring-indicator" style="border-color: ${color};"></div>
                 </div>
               </div>
-            </div>
-          `;
+            `;
+          }
 
-          if (item.seven_day_remaining !== null && item.seven_day_remaining !== undefined) {
-            const pct7d = item.seven_day_remaining;
+          // 7天周额度行
+          if (wk && wk.remaining_percent !== undefined && wk.remaining_percent !== null) {
+            if (hasSharedWindow) {
+              html += `<div style="border-top: 1px solid rgba(255, 255, 255, 0.05); margin: 8px 0; padding-top: 8px;"></div>`;
+            }
+            hasSharedWindow = true;
+            const pct7d = wk.remaining_percent;
             const col7d = getColor(pct7d);
-            const cd7d = formatCountdown(item.seven_day_reset);
+            const cd7d = formatCountdown(wk.reset_at);
             html += `
-              <div class="group-section" style="margin-top: -4px;">
-                <div class="limit-row">
-                  <div>
-                    <div class="limit-label">Weekly Limit Remaining</div>
-                    <div class="limit-sub">周窗口重置: ${cd7d ? cd7d : '充沛'}</div>
-                  </div>
-                  <div class="limit-value-box">
-                    <span class="limit-pct" style="color: ${col7d};">${pct7d}%</span>
-                    <div class="ring-indicator" style="border-color: ${col7d};"></div>
-                  </div>
+              <div class="limit-row">
+                <div>
+                  <div class="limit-label">Weekly Limit Remaining</div>
+                  <div class="limit-sub">周窗口重置: ${cd7d ? cd7d : '已就绪'}</div>
                 </div>
+                <div class="limit-value-box">
+                  <span class="limit-pct" style="color: ${col7d};">${pct7d}%</span>
+                  <div class="ring-indicator" style="border-color: ${col7d};"></div>
+                </div>
+              </div>
+            `;
+          } else {
+            if (hasSharedWindow) {
+              html += `<div style="border-top: 1px solid rgba(255, 255, 255, 0.05); margin: 8px 0; padding-top: 8px;"></div>`;
+            }
+            html += `
+              <div class="limit-row">
+                <div>
+                  <div class="limit-label">Weekly Limit Remaining</div>
+                  <div class="limit-sub">周窗口: 当前账号未返回 7 天额度</div>
+                </div>
+                <div class="limit-value-box">
+                  <span class="limit-pct" style="color: var(--text-muted); font-size: 13px;">未提供</span>
+                </div>
+              </div>
+            `;
+          }
+
+          html += `</div>`;
+
+          // 2. additional_rate_limits (若存在特定模型额度池)
+          const addLimits = item.additional_rate_limits || [];
+          if (addLimits.length > 0) {
+            html += `
+              <div class="group-section" style="margin-top: 8px;">
+                <div class="group-title">
+                  <span>额外额度</span>
+                </div>
+            `;
+            for (const alm of addLimits) {
+              const almName = alm.name || alm.id || "模型专属";
+              const almWk = alm.weekly;
+              const almFh = alm.five_hour;
+              const targetWin = almWk || almFh;
+              if (targetWin && targetWin.remaining_percent !== undefined) {
+                const remPct = targetWin.remaining_percent;
+                const rColor = getColor(remPct);
+                const rCd = formatCountdown(targetWin.reset_at);
+                html += `
+                  <div class="limit-row">
+                    <div>
+                      <div class="limit-label">${almName}</div>
+                      <div class="limit-sub">重置: ${rCd ? rCd : '已就绪'}</div>
+                    </div>
+                    <div class="limit-value-box">
+                      <span class="limit-pct" style="color: ${rColor};">${remPct}%</span>
+                      <div class="ring-indicator" style="border-color: ${rColor};"></div>
+                    </div>
+                  </div>
+                `;
+              }
+            }
+            html += `</div>`;
+          }
+
+          // 3. Credits 紧凑展示
+          if (item.credits && item.credits.has_credits) {
+            const cr = item.credits;
+            const crText = cr.unlimited ? 'Unlimited' : (cr.balance !== undefined ? cr.balance : '可用');
+            html += `
+              <div style="font-size: 11px; color: var(--text-muted); margin: 6px 2px 0 2px; display: flex; justify-content: space-between;">
+                <span>Codex Credits</span>
+                <span style="font-family: monospace; color: var(--text);">${crText}</span>
               </div>
             `;
           }
