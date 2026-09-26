@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+.env
+tokens.json
+quota_cache.json
+*.bak*
+.DS_Store

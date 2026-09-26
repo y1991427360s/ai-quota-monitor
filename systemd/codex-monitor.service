@@ -1,0 +1,15 @@
+﻿[Unit]
+Description=Codex & OpenAI Quota / Rate-limit Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/codex-monitor
+ExecStart=/usr/bin/python3 /home/ubuntu/codex-monitor/codex_monitor.py
+Restart=always
+RestartSec=10
+Environment="CHECK_INTERVAL_SECONDS=180"
+
+[Install]
+WantedBy=multi-user.target
