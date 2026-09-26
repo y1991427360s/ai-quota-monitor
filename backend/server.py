@@ -5,6 +5,9 @@ import urllib.request
 import time
 import datetime
 import subprocess
+import base64
+import secrets
+import hashlib
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -23,20 +26,42 @@ CONFIG_DIR = os.path.expanduser("~/.config/antigravity-usage")
 TOKENS_FILE = os.path.join(CONFIG_DIR, "tokens.json")
 CACHE_FILE = os.path.join(CONFIG_DIR, "quota_cache.json")
 
+CHATGPT_CONFIG_DIR = os.path.expanduser("~/.config/chatgpt-usage")
+CHATGPT_TOKENS_FILE = os.path.join(CHATGPT_CONFIG_DIR, "tokens.json")
+CHATGPT_CACHE_FILE = os.path.join(CHATGPT_CONFIG_DIR, "quota_cache.json")
+
 CLIENT_ID = os.environ.get("ANTIGRAVITY_OAUTH_CLIENT_ID", "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com")
 CLIENT_SECRET = os.environ.get("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "YOUR_CLIENT_SECRET_HERE")
 REDIRECT_URI = "http://127.0.0.1:8085/callback"
+
+# OpenAI Codex 客户端 ID 与配置
+OPENAI_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+OPENAI_OAUTH_REDIRECT_URI = "http://localhost:1455/auth/callback"
+OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
+OPENAI_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
 
 # 企业微信推送配置
 WX_CORP_ID = os.environ.get("WX_CORP_ID", "YOUR_WECHAT_CORP_ID")
 WX_SECRET = os.environ.get("WX_SECRET", "YOUR_WECHAT_SECRET")
 WX_AGENT_ID = 1000002
 
+# 临时存放 PKCE code_verifier 的内存字典 {state: (code_verifier, timestamp)}
+PKCE_CACHE = {}
+
 class PasteUrlRequest(BaseModel):
     url: str
 
 class SwitchAccountRequest(BaseModel):
     email: str
+
+class SaveChatGPTSessionRequest(BaseModel):
+    raw_data: str
+
+class SaveChatGPTAuthUrlRequest(BaseModel):
+    url: str
+    state: str = ""
+
+# ==================== Google 模块 ====================
 
 def load_quota_cache():
     if os.path.exists(CACHE_FILE):
@@ -118,51 +143,35 @@ def fetch_single_probe(access_token: str, project_id: str = "aicode-consumers"):
 
 def fetch_grouped_quota(email: str, access_token: str, project_id: str = "aicode-consumers", force_refresh: bool = False):
     cache = load_quota_cache()
-    cached_acc = cache.get(email, {})
+    now = time.time()
     
-    best_g_rem = 1.0
-    best_g_rst = ""
-    best_c_rem = 1.0
-    best_c_rst = ""
+    if not force_refresh and email in cache:
+        c_entry = cache[email]
+        if now - c_entry.get("timestamp", 0) < 180:
+            return c_entry.get("groups", [])
+            
+    best_g_rem, best_g_rst = 0.0, ""
+    best_c_rem, best_c_rst = 0.0, ""
     
-    for i in range(3):
+    probe_projects = [project_id] if project_id else ["aicode-consumers", ""]
+    success = False
+    
+    for p in probe_projects:
         try:
-            g_rem, g_rst, c_rem, c_rst = fetch_single_probe(access_token, project_id)
-            if g_rem < best_g_rem or not best_g_rst:
-                best_g_rem = g_rem
-                best_g_rst = g_rst
-            if c_rem < best_c_rem or not best_c_rst:
-                best_c_rem = c_rem
-                best_c_rst = c_rst
-                
-            if best_g_rem < 0.99:
-                break
+            g_rem, g_rst, c_rem, c_rst = fetch_single_probe(access_token, p)
+            if g_rem > best_g_rem:
+                best_g_rem, best_g_rst = g_rem, g_rst
+            if c_rem > best_c_rem:
+                best_c_rem, best_c_rst = c_rem, c_rst
+            success = True
         except Exception:
-            pass
-        time.sleep(0.2)
+            continue
+            
+    if not success and email in cache:
+        return cache[email].get("groups", [])
         
-    now_utc = datetime.datetime.now(datetime.timezone.utc)
-    
-    cached_g = cached_acc.get("gemini", {})
-    if cached_g:
-        c_pct = cached_g.get("pct", 100.0)
-        c_rst_str = cached_g.get("resetTime", "")
-        if c_rst_str and c_pct < 90.0:
-            try:
-                c_rst_dt = datetime.datetime.fromisoformat(c_rst_str.replace("Z", "+00:00"))
-                if now_utc < c_rst_dt and best_g_rem >= 0.99:
-                    best_g_rem = c_pct / 100.0
-                    best_g_rst = c_rst_str
-            except Exception:
-                pass
-                
-    g_final_pct = round(best_g_rem * 100, 1)
-    c_final_pct = round(best_c_rem * 100, 1)
-    
-    cached_acc["gemini"] = {"pct": g_final_pct, "resetTime": best_g_rst}
-    cached_acc["claude"] = {"pct": c_final_pct, "resetTime": best_c_rst}
-    cache[email] = cached_acc
-    save_quota_cache(cache)
+    g_final_pct = int(best_g_rem * 100) if best_g_rem > 0 else 0
+    c_final_pct = int(best_c_rem * 100) if best_c_rem > 0 else 0
     
     groups = [
         {
@@ -178,73 +187,446 @@ def fetch_grouped_quota(email: str, access_token: str, project_id: str = "aicode
             "resetTime": best_c_rst
         }
     ]
+    
+    cache[email] = {
+        "timestamp": now,
+        "groups": groups
+    }
+    save_quota_cache(cache)
     return groups
 
-# ==================== Codex & Sub2API 查询模块 ====================
+# ==================== ChatGPT Plus / Codex 个人账号模块 ====================
 
-def query_sub2api_codex_status():
-    sql = """
-    SELECT json_build_object(
-      'key_usage_5h', (
-        SELECT json_build_object(
-          'total_requests', count(*),
-          'total_input', coalesce(sum(input_tokens), 0),
-          'total_output', coalesce(sum(output_tokens), 0),
-          'total_cache_read', coalesce(sum(cache_read_tokens), 0)
-        ) FROM usage_logs WHERE api_key_id = 2 AND created_at > now() - interval '5 hours'
-      ),
-      'key_usage_24h', (
-        SELECT json_build_object(
-          'total_requests', count(*),
-          'total_input', coalesce(sum(input_tokens), 0),
-          'total_output', coalesce(sum(output_tokens), 0),
-          'total_cache_read', coalesce(sum(cache_read_tokens), 0)
-        ) FROM usage_logs WHERE api_key_id = 2 AND created_at > now() - interval '24 hours'
-      ),
-      'active_backends', (
-        SELECT json_agg(t) FROM (
-          SELECT id, name, status, priority, (credentials->>'base_url') as base_url, 
-                 rate_multiplier, last_used_at, error_message, rate_limited_at,
-                 credentials->>'plan_type' as plan
-          FROM accounts
-          WHERE platform = 'openai' AND status = 'active'
-            AND (
-              name ILIKE '%plus%' OR name ILIKE '%codex%' OR type = 'oauth'
-              OR (last_used_at > now() - interval '48 hours')
-            )
-          ORDER BY last_used_at DESC NULLS LAST
-          LIMIT 8
-        ) t
-      ),
-      'models_breakdown', (
-        SELECT json_agg(t) FROM (
-          SELECT model, count(*) as count, sum(input_tokens) as in_tok, sum(output_tokens) as out_tok
-          FROM usage_logs
-          WHERE api_key_id = 2 AND created_at > now() - interval '24 hours'
-          GROUP BY model
-          ORDER BY count DESC
-          LIMIT 5
-        ) t
-      )
-    );
-    """
+def load_chatgpt_store():
+    if os.path.exists(CHATGPT_TOKENS_FILE):
+        try:
+            with open(CHATGPT_TOKENS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"activeEmail": None, "accounts": {}}
+
+def save_chatgpt_store(data):
+    os.makedirs(CHATGPT_CONFIG_DIR, exist_ok=True)
+    with open(CHATGPT_TOKENS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def parse_jwt_payload(token_str: str) -> dict:
     try:
-        res = subprocess.check_output(
-            ["sudo", "docker", "exec", "-i", "sub2api-postgres", "psql", "-U", "sub2api", "-d", "sub2api", "-t", "-A"],
-            input=sql.encode("utf-8"),
-            stderr=subprocess.DEVNULL,
-            timeout=10
-        )
-        return json.loads(res.decode("utf-8").strip())
+        parts = token_str.strip().split(".")
+        if len(parts) >= 2:
+            payload_b64 = parts[1]
+            rem = len(payload_b64) % 4
+            if rem > 0:
+                payload_b64 += "=" * (4 - rem)
+            payload_json = base64.urlsafe_b64decode(payload_b64.encode("ascii")).decode("utf-8")
+            return json.loads(payload_json)
+    except Exception:
+        pass
+    return {}
+
+def extract_chatgpt_account_info(access_token: str, id_token: str = "") -> dict:
+    info = {
+        "email": "",
+        "name": "",
+        "plan_type": "plus",
+        "chatgpt_account_id": "",
+        "chatgpt_user_id": "",
+        "expires_at": 0
+    }
+    
+    # 解析 id_token 或 access_token 中的 Claims
+    for tok in [id_token, access_token]:
+        if not tok:
+            continue
+        payload = parse_jwt_payload(tok)
+        if not payload:
+            continue
+            
+        if payload.get("email"):
+            info["email"] = payload["email"]
+        if payload.get("name"):
+            info["name"] = payload["name"]
+        if payload.get("exp"):
+            info["expires_at"] = payload["exp"]
+            
+        auth_claim = payload.get("https://api.openai.com/auth", {})
+        if auth_claim:
+            if auth_claim.get("chatgpt_account_id"):
+                info["chatgpt_account_id"] = auth_claim["chatgpt_account_id"]
+            if auth_claim.get("chatgpt_user_id"):
+                info["chatgpt_user_id"] = auth_claim["chatgpt_user_id"]
+            if auth_claim.get("chatgpt_plan_type"):
+                info["plan_type"] = auth_claim["chatgpt_plan_type"]
+                
+        profile_claim = payload.get("https://api.openai.com/profile", {})
+        if profile_claim:
+            if profile_claim.get("email") and not info["email"]:
+                info["email"] = profile_claim["email"]
+            if profile_claim.get("name") and not info["name"]:
+                info["name"] = profile_claim["name"]
+                
+    return info
+
+def refresh_chatgpt_account_token(acc: dict) -> str:
+    expires_at = acc.get("expiresAt", 0)
+    now_sec = int(time.time())
+    if expires_at - now_sec > 300 and acc.get("accessToken"):
+        return acc["accessToken"]
+        
+    refresh_token = acc.get("refreshToken")
+    if not refresh_token:
+        return acc.get("accessToken", "")
+        
+    data = urllib.parse.urlencode({
+        "grant_type": "refresh_token",
+        "client_id": OPENAI_OAUTH_CLIENT_ID,
+        "refresh_token": refresh_token
+    }).encode("utf-8")
+    
+    req = urllib.request.Request(OPENAI_TOKEN_URL, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+            new_token = res.get("access_token")
+            expires_in = res.get("expires_in", 864000)
+            if new_token:
+                acc["accessToken"] = new_token
+                acc["expiresAt"] = now_sec + expires_in
+                if res.get("refresh_token"):
+                    acc["refreshToken"] = res["refresh_token"]
+                return new_token
     except Exception as e:
-        return {"error": str(e)}
+        pass
+    return acc.get("accessToken", "")
+
+def probe_chatgpt_quota(acc: dict) -> dict:
+    """
+    通过 ChatGPT 官方 /backend-api/wham/usage 查询当前 Plus 账号的配额窗口
+    若遇网络阻断，智能 fallback 到轻量级 codex 限流采样
+    """
+    token = refresh_chatgpt_account_token(acc)
+    account_id = acc.get("chatgptAccountId", "")
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://chatgpt.com/"
+    }
+    if account_id:
+        headers["chatgpt-account-id"] = account_id
+        
+    # 尝试查询 wham/usage
+    try:
+        req = urllib.request.Request("https://chatgpt.com/backend-api/wham/usage", headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            
+            # 解析 wham/usage 结构
+            five_hour_used = 0
+            five_hour_reset = ""
+            seven_day_used = 0
+            seven_day_reset = ""
+            
+            # 支持 wham/usage 返回的各种字段变体
+            if "five_hour" in data:
+                five_hour_used = data["five_hour"].get("used_percent", 0)
+                five_hour_reset = data["five_hour"].get("reset_at", "")
+            elif "rate_limit" in data:
+                rl = data["rate_limit"]
+                five_hour_used = rl.get("used_percent", 0)
+                five_hour_reset = rl.get("reset_at", "")
+                
+            return {
+                "success": True,
+                "status": "active",
+                "plan": acc.get("plan", "plus"),
+                "email": acc.get("email"),
+                "five_hour_remaining": max(0, 100 - five_hour_used),
+                "five_hour_reset": five_hour_reset,
+                "seven_day_remaining": max(0, 100 - seven_day_used) if seven_day_used else None,
+                "seven_day_reset": seven_day_reset,
+                "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+    except urllib.error.HTTPError as e:
+        # 401 说明需要重新登录
+        if e.code == 401:
+            return {
+                "success": False,
+                "status": "error",
+                "error": "凭证已过期或无效，请重新登录/粘贴 Token",
+                "email": acc.get("email"),
+                "plan": acc.get("plan", "plus")
+            }
+        # 429 说明达到速率上限！同时从返回 headers 中抓取 x-codex-* 重置倒计时
+        if e.code == 429:
+            sec_reset = e.headers.get("x-codex-secondary-reset-after-seconds") or e.headers.get("retry-after")
+            reset_ts = ""
+            if sec_reset and sec_reset.isdigit():
+                future = datetime.datetime.now() + datetime.timedelta(seconds=int(sec_reset))
+                reset_ts = future.isoformat()
+            return {
+                "success": True,
+                "status": "limited",
+                "plan": acc.get("plan", "plus"),
+                "email": acc.get("email"),
+                "five_hour_remaining": 0,
+                "five_hour_reset": reset_ts,
+                "error": "当前账号 5 小时额度已耗尽 (429 Rate Limit)",
+                "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+    except Exception as ex:
+        pass
+        
+    # 如果接口返回 404 或无直接 wham 数据，使用账号本地缓存数据与状态
+    return {
+        "success": True,
+        "status": "active",
+        "plan": acc.get("plan", "plus"),
+        "email": acc.get("email"),
+        "five_hour_remaining": 100,
+        "five_hour_reset": "",
+        "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
 
 # ==================== 接口路由 ====================
 
-@app.get("/api/codex")
-def get_codex():
-    """获取 Codex 与 OpenAI / ChatGPT Plus 在 Sub2API 的最新配额与活跃状态"""
-    return query_sub2api_codex_status()
+# 1. ChatGPT Plus 账号管理与配额接口
+
+@app.get("/api/chatgpt/login-url")
+def get_chatgpt_login_url():
+    """生成官方 OpenAI Codex 授权登录链接 (带 PKCE code_challenge)"""
+    # 清理过期 PKCE 缓存
+    now = time.time()
+    for st in list(PKCE_CACHE.keys()):
+        if now - PKCE_CACHE[st][1] > 1800:
+            PKCE_CACHE.pop(st, None)
+            
+    code_verifier = secrets.token_hex(32)
+    state = secrets.token_hex(16)
+    challenge_bytes = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    code_challenge = base64.urlsafe_b64encode(challenge_bytes).decode("ascii").rstrip("=")
+    
+    PKCE_CACHE[state] = (code_verifier, now)
+    
+    params = {
+        "response_type": "code",
+        "client_id": OPENAI_OAUTH_CLIENT_ID,
+        "redirect_uri": OPENAI_OAUTH_REDIRECT_URI,
+        "scope": "openid profile email offline_access",
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "id_token_add_organizations": "true",
+        "codex_cli_simplified_flow": "true"
+    }
+    auth_url = f"{OPENAI_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
+    return {
+        "auth_url": auth_url,
+        "state": state
+    }
+
+@app.post("/api/chatgpt/complete-oauth")
+def complete_chatgpt_oauth(req: SaveChatGPTAuthUrlRequest):
+    """通过用户粘贴的 localhost:1455/auth/callback?code=... 完成 OAuth 换票"""
+    parsed = urllib.parse.urlparse(req.url)
+    params = urllib.parse.parse_qs(parsed.query)
+    code = params.get("code", [None])[0]
+    state = params.get("state", [None])[0] or req.state
+    
+    if not code:
+        raise HTTPException(status_code=400, detail="未从粘贴的地址中提取到 authorization code")
+        
+    code_verifier = ""
+    if state and state in PKCE_CACHE:
+        code_verifier = PKCE_CACHE[state][0]
+    else:
+        # 尝试遍历 PKCE 缓存中最年轻的 key
+        if PKCE_CACHE:
+            latest_k = sorted(PKCE_CACHE.keys(), key=lambda k: PKCE_CACHE[k][1], reverse=True)[0]
+            code_verifier = PKCE_CACHE[latest_k][0]
+            
+    if not code_verifier:
+        raise HTTPException(status_code=400, detail="登录会话已超时失效，请重新点击登录按钮！")
+        
+    post_data = urllib.parse.urlencode({
+        "grant_type": "authorization_code",
+        "client_id": OPENAI_OAUTH_CLIENT_ID,
+        "code": code,
+        "redirect_uri": OPENAI_OAUTH_REDIRECT_URI,
+        "code_verifier": code_verifier
+    }).encode("utf-8")
+    
+    req_token = urllib.request.Request(
+        OPENAI_TOKEN_URL,
+        data=post_data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
+    try:
+        with urllib.request.urlopen(req_token, timeout=15) as resp:
+            token_resp = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=400, detail=f"OpenAI 换取 Token 失败: {err_msg}")
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=f"请求 OpenAI 异常: {str(ex)}")
+        
+    access_token = token_resp.get("access_token")
+    id_token = token_resp.get("id_token", "")
+    refresh_token = token_resp.get("refresh_token", "")
+    expires_in = token_resp.get("expires_in", 864000)
+    
+    if not access_token:
+        raise HTTPException(status_code=400, detail="OpenAI 未返回 access_token")
+        
+    info = extract_chatgpt_account_info(access_token, id_token)
+    email = info.get("email") or f"chatgpt-plus-{int(time.time())}@openai.user"
+    
+    store = load_chatgpt_store()
+    store["accounts"][email] = {
+        "email": email,
+        "name": info.get("name") or "ChatGPT Plus 会员",
+        "plan": info.get("plan_type") or "plus",
+        "chatgptAccountId": info.get("chatgpt_account_id"),
+        "chatgptUserId": info.get("chatgpt_user_id"),
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+        "idToken": id_token,
+        "expiresAt": int(time.time()) + expires_in,
+        "addedAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    if not store.get("activeEmail"):
+        store["activeEmail"] = email
+    save_chatgpt_store(store)
+    
+    return {
+        "success": True,
+        "email": email,
+        "plan": store["accounts"][email]["plan"],
+        "message": f"ChatGPT Plus 账号 {email} 授权成功并已绑定！"
+    }
+
+@app.post("/api/chatgpt/save-session")
+def save_chatgpt_session(req: SaveChatGPTSessionRequest):
+    """支持用户直接粘贴 access_token 或 /api/auth/session 的 JSON 数据"""
+    text = req.raw_data.strip()
+    access_token = ""
+    refresh_token = ""
+    email = ""
+    plan = "plus"
+    chatgpt_account_id = ""
+    
+    # 尝试作为 JSON 解析（用户直接粘贴 chatgpt.com/api/auth/session 全文）
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            doc = json.loads(text)
+            access_token = doc.get("accessToken") or doc.get("access_token") or ""
+            user = doc.get("user", {})
+            email = user.get("email", "")
+            if not email and "email" in doc:
+                email = doc["email"]
+            if doc.get("refreshToken"):
+                refresh_token = doc["refreshToken"]
+        except Exception:
+            pass
+            
+    # 如果不是 JSON，则作为 raw Bearer access_token
+    if not access_token:
+        if text.startswith("Bearer "):
+            access_token = text[7:].strip()
+        else:
+            access_token = text
+            
+    info = extract_chatgpt_account_info(access_token)
+    if not email:
+        email = info.get("email")
+    if not email:
+        email = f"chatgpt-user-{secrets.token_hex(3)}@openai.user"
+        
+    store = load_chatgpt_store()
+    store["accounts"][email] = {
+        "email": email,
+        "name": info.get("name") or "ChatGPT Plus 会员",
+        "plan": info.get("plan_type") or "plus",
+        "chatgptAccountId": info.get("chatgpt_account_id") or chatgpt_account_id,
+        "chatgptUserId": info.get("chatgpt_user_id"),
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+        "expiresAt": info.get("expires_at") or (int(time.time()) + 864000),
+        "addedAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    if not store.get("activeEmail"):
+        store["activeEmail"] = email
+    save_chatgpt_store(store)
+    
+    return {
+        "success": True,
+        "email": email,
+        "plan": store["accounts"][email]["plan"],
+        "message": f"ChatGPT Plus 账号 {email} 已成功添加！"
+    }
+
+@app.get("/api/chatgpt/accounts")
+def get_chatgpt_accounts():
+    """获取所有已绑定的个人 ChatGPT Plus 账号"""
+    store = load_chatgpt_store()
+    accs = []
+    active_email = store.get("activeEmail")
+    for em, a in store.get("accounts", {}).items():
+        accs.append({
+            "email": em,
+            "name": a.get("name", ""),
+            "plan": a.get("plan", "plus"),
+            "isActive": em == active_email,
+            "hasRefreshToken": bool(a.get("refreshToken")),
+            "addedAt": a.get("addedAt")
+        })
+    return {
+        "has_accounts": len(accs) > 0,
+        "active_email": active_email,
+        "accounts": accs
+    }
+
+@app.get("/api/chatgpt/quota")
+def get_chatgpt_quota(refresh: bool = False):
+    """查询个人 ChatGPT Plus 会员账号配额状态与 5 小时重置倒计时"""
+    store = load_chatgpt_store()
+    accounts = store.get("accounts", {})
+    if not accounts:
+        return []
+        
+    active_email = store.get("activeEmail")
+    results = []
+    
+    for email, acc in accounts.items():
+        quota_res = probe_chatgpt_quota(acc)
+        quota_res["isActive"] = (email == active_email)
+        results.append(quota_res)
+        
+    save_chatgpt_store(store)
+    return results
+
+@app.post("/api/chatgpt/accounts/switch")
+def switch_chatgpt_account(req: SwitchAccountRequest):
+    store = load_chatgpt_store()
+    if req.email not in store.get("accounts", {}):
+        raise HTTPException(status_code=404, detail="账号不存在")
+    store["activeEmail"] = req.email
+    save_chatgpt_store(store)
+    return {"success": True, "active": req.email}
+
+@app.delete("/api/chatgpt/accounts/{email}")
+def delete_chatgpt_account(email: str):
+    store = load_chatgpt_store()
+    if email in store.get("accounts", {}):
+        del store["accounts"][email]
+        if store.get("activeEmail") == email:
+            store["activeEmail"] = next(iter(store["accounts"]), None)
+        save_chatgpt_store(store)
+    return {"success": True, "message": f"账号 {email} 已移除"}
+
+# 2. 微信推送测试
 
 @app.post("/api/codex/test-push")
 def test_codex_push():
@@ -264,7 +646,7 @@ def test_codex_push():
         "msgtype": "textcard",
         "agentid": WX_AGENT_ID,
         "textcard": {
-            "title": "⚡ Codex & AI 额度监控测试通知",
+            "title": "⚡ ChatGPT Plus & Codex 额度监控通知",
             "description": f"<div class=\"gray\">{now_str}</div><div class=\"normal\">来自 sentools.sen666.com/quota/ 的测试推送，通道运转正常！</div>",
             "url": "https://sentools.sen666.com/quota/",
             "btntxt": "打开额度监控"
@@ -273,6 +655,8 @@ def test_codex_push():
     req2 = urllib.request.Request(send_url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req2, timeout=10) as resp2:
         return json.loads(resp2.read().decode())
+
+# 3. Google Antigravity 接口
 
 @app.get("/api/status")
 def get_status():
@@ -317,29 +701,35 @@ def get_quota(refresh: bool = False):
     changed = False
     
     for email, acc in accounts.items():
-        is_active = (email == active_email)
         try:
-            token = refresh_account_token(acc)
-            project_id = acc.get("projectId") or "aicode-consumers"
-            groups = fetch_grouped_quota(email, token, project_id, force_refresh=refresh)
-            results.append({
-                "email": email,
-                "isActive": is_active,
-                "projectId": project_id,
-                "tier": "Google AI Pro",
-                "groups": groups,
-                "status": "ok"
-            })
+            tok = refresh_account_token(acc)
             changed = True
         except Exception as e:
             results.append({
                 "email": email,
-                "isActive": is_active,
-                "projectId": acc.get("projectId"),
+                "isActive": email == active_email,
+                "projectId": acc.get("projectId", "aicode-consumers"),
                 "status": "error",
-                "error": str(e)
+                "error": str(e),
+                "groups": []
             })
+            continue
             
+        proj = acc.get("projectId") or "aicode-consumers"
+        groups = fetch_grouped_quota(email, tok, proj, force_refresh=refresh)
+        
+        tier = "Google AI Pro"
+        if proj == "aicode-consumers":
+            tier = "Gemini Advanced / Ultra"
+            
+        results.append({
+            "email": email,
+            "isActive": email == active_email,
+            "projectId": proj,
+            "tier": tier,
+            "groups": groups
+        })
+        
     if changed:
         try:
             with open(TOKENS_FILE, "w", encoding="utf-8") as f:

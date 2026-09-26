@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -100,43 +100,56 @@
       align-items: center;
       gap: 6px;
       padding: 8px 14px;
-      border-radius: 9px;
+      border-radius: 8px;
       font-size: 13px;
-      font-weight: 600;
+      font-weight: 500;
       cursor: pointer;
-      border: 1px solid transparent;
+      border: none;
       transition: all 0.2s;
       text-decoration: none;
     }
 
     .btn-primary {
       background: var(--primary);
-      color: #0b1120;
+      color: #030712;
+      font-weight: 600;
     }
 
     .btn-primary:hover {
       background: var(--primary-hover);
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
     }
 
     .btn-secondary {
       background: rgba(255, 255, 255, 0.05);
-      border-color: var(--card-border);
       color: var(--text);
+      border: 1px solid var(--card-border);
     }
 
     .btn-secondary:hover {
       background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
     }
 
-    /* 选项卡 Tab 控制器 */
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.25);
+    }
+
+    /* Tabs */
     .tabs-bar {
       display: flex;
       gap: 8px;
-      margin-bottom: 20px;
       background: rgba(0, 0, 0, 0.25);
       padding: 4px;
       border-radius: 12px;
       border: 1px solid var(--card-border);
+      margin-bottom: 20px;
       width: fit-content;
     }
 
@@ -228,6 +241,18 @@
       border: 1px solid rgba(16, 185, 129, 0.4);
     }
 
+    .badge-warn {
+      background: rgba(245, 158, 11, 0.2);
+      color: var(--warning);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+    }
+
+    .badge-danger {
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--danger);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+    }
+
     .group-section {
       background: rgba(0, 0, 0, 0.35);
       border-radius: 10px;
@@ -278,7 +303,7 @@
     }
 
     .limit-pct {
-      font-size: 14px;
+      font-size: 15px;
       font-weight: 700;
       font-family: monospace;
     }
@@ -298,88 +323,39 @@
       padding-top: 12px;
       border-top: 1px solid rgba(255, 255, 255, 0.06);
       font-size: 12px;
-      color: var(--text-muted);
     }
 
     .btn-card {
-      background: transparent;
+      background: none;
       border: none;
       color: var(--text-muted);
       cursor: pointer;
       font-size: 12px;
-      transition: color 0.2s;
+      padding: 4px 6px;
+      border-radius: 6px;
+      transition: all 0.2s;
     }
 
     .btn-card:hover {
       color: var(--danger);
+      background: rgba(239, 68, 68, 0.1);
     }
 
     .btn-switch {
       background: rgba(56, 189, 248, 0.1);
-      border: 1px solid rgba(56, 189, 248, 0.2);
+      border: 1px solid rgba(56, 189, 248, 0.25);
       color: var(--primary);
-      padding: 3px 8px;
+      padding: 4px 10px;
       border-radius: 6px;
+      font-size: 12px;
       cursor: pointer;
-      font-size: 11px;
       transition: all 0.2s;
     }
 
     .btn-switch:hover {
-      background: rgba(56, 189, 248, 0.25);
-    }
-
-    /* Codex 专用样式看板 */
-    .stat-row-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 14px;
-      margin-bottom: 20px;
-    }
-
-    .stat-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: var(--radius);
-      padding: 16px 20px;
-    }
-
-    .stat-num {
-      font-size: 26px;
-      font-weight: 800;
-      color: var(--primary);
-      margin-top: 4px;
-      font-family: monospace;
-    }
-
-    .table-container {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: var(--radius);
-      overflow-x: auto;
-      margin-bottom: 20px;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-      text-align: left;
-    }
-
-    th, td {
-      padding: 12px 16px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    }
-
-    th {
-      color: var(--text-muted);
+      background: var(--primary);
+      color: #030712;
       font-weight: 600;
-      background: rgba(0, 0, 0, 0.2);
-    }
-
-    tr:last-child td {
-      border-bottom: none;
     }
 
     /* Modal */
@@ -406,7 +382,7 @@
       background: #111827;
       border: 1px solid var(--card-border);
       border-radius: var(--radius);
-      max-width: 540px;
+      max-width: 560px;
       width: 100%;
       padding: 24px;
       box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
@@ -440,12 +416,32 @@
       padding: 10px 12px;
       color: white;
       font-size: 13px;
-      margin-bottom: 16px;
+      margin-bottom: 14px;
       outline: none;
       transition: border-color 0.2s;
     }
 
     .input-field:focus {
+      border-color: var(--primary);
+    }
+
+    .textarea-field {
+      width: 100%;
+      min-height: 90px;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: white;
+      font-size: 12px;
+      font-family: monospace;
+      margin-bottom: 14px;
+      outline: none;
+      resize: vertical;
+      transition: border-color 0.2s;
+    }
+
+    .textarea-field:focus {
       border-color: var(--primary);
     }
 
@@ -475,6 +471,34 @@
       font-size: 16px;
       margin-bottom: 8px;
     }
+
+    /* Sub-tabs in modal */
+    .modal-subtabs {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 16px;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 4px;
+      border-radius: 8px;
+    }
+
+    .modal-subtab-btn {
+      flex: 1;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .modal-subtab-btn.active {
+      background: var(--card-bg);
+      color: var(--primary);
+    }
   </style>
 </head>
 <body>
@@ -486,7 +510,7 @@
         </a>
         <div>
           <h1>AI 额度与模型监控</h1>
-          <div class="subtitle">OpenAI Codex / ChatGPT Plus 及 Google Antigravity 多模型配额实时看板</div>
+          <div class="subtitle">ChatGPT Plus / Codex 会员账号及 Google Antigravity 配额实时看板</div>
         </div>
       </div>
       <div class="header-actions">
@@ -498,7 +522,13 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
           刷新
         </button>
-        <button class="btn btn-primary" id="addGoogleBtn" onclick="openAddModal()">
+        <!-- 登录 ChatGPT Plus 按钮 -->
+        <button class="btn btn-primary" id="addChatgptBtn" onclick="openChatgptModal()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+          登录 / 绑定 ChatGPT Plus
+        </button>
+        <!-- 添加 Google 账号按钮 -->
+        <button class="btn btn-primary" id="addGoogleBtn" style="display: none;" onclick="openAddModal()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
           添加谷歌账号
         </button>
@@ -509,7 +539,7 @@
     <div class="tabs-bar">
       <button class="tab-btn active" id="tabCodexBtn" onclick="switchTab('codex')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
-        Codex / Plus 额度
+        ChatGPT Plus / Codex 额度
       </button>
       <button class="tab-btn" id="tabGoogleBtn" onclick="switchTab('google')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/></svg>
@@ -520,6 +550,64 @@
     <!-- 容器内容 -->
     <div id="contentArea">
       <div class="loading-state">正在拉取配额数据...</div>
+    </div>
+  </div>
+
+  <!-- 登录 / 添加 ChatGPT Plus 账号 Modal -->
+  <div class="modal-overlay" id="chatgptModal">
+    <div class="modal">
+      <div class="modal-title">登录 / 绑定 ChatGPT Plus 会员账号</div>
+      
+      <div class="modal-subtabs">
+        <button class="modal-subtab-btn active" id="subtabOauthBtn" onclick="switchChatgptMethod('oauth')">方式一：官方 OAuth 授权（推荐）</button>
+        <button class="modal-subtab-btn" id="subtabTokenBtn" onclick="switchChatgptMethod('token')">方式二：直接粘贴 Token / Session</button>
+      </div>
+
+      <!-- 方式一：OAuth 登录流程 -->
+      <div id="methodOauthArea">
+        <div class="step-box">
+          <ol>
+            <li>点击下方<b>「打开 OpenAI 官方登录授权」</b>，在官方页面登录你的 Plus 会员；</li>
+            <li>同意 Codex CLI 访问授权；</li>
+            <li>浏览器将跳转到一个无法连接的 <code>http://localhost:1455/auth/callback?code=...</code> 页面；</li>
+            <li><b>复制浏览器地址栏的完整网址</b>，粘贴到下方输入框，点击绑定即可！</li>
+          </ol>
+        </div>
+        <div style="margin-bottom: 14px;">
+          <button class="btn btn-secondary" style="width: 100%; justify-content: center;" onclick="openChatgptAuthUrl()">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            第 1 步：点击打开 OpenAI 官方授权登录
+          </button>
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">第 2 步：粘贴跳转后的完整网址 (localhost:1455/auth/callback?code=...)</label>
+          <input type="text" id="chatgptCallbackInput" class="input-field" placeholder="http://localhost:1455/auth/callback?code=eyJ...&state=...">
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" onclick="closeChatgptModal()">取消</button>
+          <button class="btn btn-primary" id="submitChatgptOauthBtn" onclick="submitChatgptOauth()">完成授权绑定</button>
+        </div>
+      </div>
+
+      <!-- 方式二：粘贴 Token / Session 流程 -->
+      <div id="methodTokenArea" style="display: none;">
+        <div class="step-box">
+          <div style="margin-bottom: 6px;">可直接粘贴以下任意一种凭据：</div>
+          <ol>
+            <li>浏览器登录 <code>chatgpt.com</code> 后访问 <code>chatgpt.com/api/auth/session</code> 的全文 JSON；</li>
+            <li>或 DevTools / Cookie 中的 <code>accessToken</code> 字符串。</li>
+          </ol>
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">粘贴 Token 或 Session JSON 内容</label>
+          <textarea id="chatgptTokenInput" class="textarea-field" placeholder='{"user":{"email":"..."},"accessToken":"eyJhbGciOi..."}'></textarea>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" onclick="closeChatgptModal()">取消</button>
+          <button class="btn btn-primary" id="submitChatgptTokenBtn" onclick="submitChatgptToken()">确认添加</button>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -554,19 +642,22 @@
 
   <script>
     let currentTab = "codex";
-    let authUrl = "";
+    let googleAuthUrl = "";
+    let chatgptAuthUrl = "";
+    let chatgptAuthState = "";
 
     function switchTab(tab) {
       currentTab = tab;
       document.getElementById("tabCodexBtn").classList.toggle("active", tab === "codex");
       document.getElementById("tabGoogleBtn").classList.toggle("active", tab === "google");
+      document.getElementById("addChatgptBtn").style.display = (tab === "codex") ? "inline-flex" : "none";
       document.getElementById("addGoogleBtn").style.display = (tab === "google") ? "inline-flex" : "none";
       fetchActiveTab();
     }
 
     function fetchActiveTab(forceRefresh = false) {
       if (currentTab === "codex") {
-        fetchCodexData();
+        fetchChatgptData(forceRefresh);
       } else {
         fetchGoogleData(forceRefresh);
       }
@@ -586,150 +677,248 @@
       }
     }
 
-    // ==================== Codex 渲染 ====================
-    async function fetchCodexData() {
+    // ==================== ChatGPT Plus / Codex 模块 ====================
+
+    async function fetchChatgptData(forceRefresh = false) {
       const area = document.getElementById("contentArea");
-      area.innerHTML = '<div class="loading-state">正在查询 Codex 5h 活跃与网关状态...</div>';
+      area.innerHTML = '<div class="loading-state">正在查询 ChatGPT Plus 账号额度与滑窗状态...</div>';
       try {
-        const res = await fetch("/quota/api/codex");
+        const res = await fetch(`/quota/api/chatgpt/quota?refresh=${forceRefresh ? 'true' : 'false'}`);
         const data = await res.json();
-        renderCodexView(data);
+        if (Array.isArray(data) && data.length > 0) {
+          renderChatgptCards(data);
+        } else {
+          renderChatgptEmptyState();
+        }
       } catch (e) {
-        area.innerHTML = `<div class="empty-state" style="color: var(--danger);">加载 Codex 数据失败：${e.message}</div>`;
+        area.innerHTML = `<div class="empty-state" style="color: var(--danger);">加载 ChatGPT Plus 数据失败：${e.message}</div>`;
       }
     }
 
-    function renderCodexView(data) {
+    function renderChatgptEmptyState() {
       const area = document.getElementById("contentArea");
-      const u5h = data.key_usage_5h || {};
-      const u24h = data.key_usage_24h || {};
-      const backends = data.active_backends || [];
-      const models = data.models_breakdown || [];
-
-      let html = `
-        <div class="stat-row-grid">
-          <div class="stat-card">
-            <div style="font-size: 12px; color: var(--text-muted);">Codex 5 小时请求数</div>
-            <div class="stat-num">${u5h.total_requests || 0} <span style="font-size: 13px; color: var(--text-muted); font-weight: normal;">次</span></div>
-            <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">滑窗请求负载</div>
-          </div>
-          <div class="stat-card">
-            <div style="font-size: 12px; color: var(--text-muted);">5 小时 Token 总计</div>
-            <div class="stat-num" style="color: #38bdf8;">${formatTokens((u5h.total_input || 0) + (u5h.total_output || 0))}</div>
-            <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">输入 ${formatTokens(u5h.total_input || 0)} / 输出 ${formatTokens(u5h.total_output || 0)}</div>
-          </div>
-          <div class="stat-card">
-            <div style="font-size: 12px; color: var(--text-muted);">Prompt 缓存读取</div>
-            <div class="stat-num" style="color: #22c55e;">${formatTokens(u5h.total_cache_read || 0)}</div>
-            <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">省流缓存率 ${(u5h.total_cache_read ? ((u5h.total_cache_read / (u5h.total_cache_read + (u5h.total_input||1)))*100).toFixed(1) : 0)}%</div>
-          </div>
-          <div class="stat-card">
-            <div style="font-size: 12px; color: var(--text-muted);">24 小时累计调用</div>
-            <div class="stat-num" style="color: #818cf8;">${u24h.total_requests || 0} <span style="font-size: 13px; color: var(--text-muted); font-weight: normal;">次</span></div>
-            <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">总 Tokens: ${formatTokens((u24h.total_input||0) + (u24h.total_output||0))}</div>
-          </div>
+      area.innerHTML = `
+        <div class="empty-state">
+          <div style="font-size: 32px; margin-bottom: 12px;">⚡</div>
+          <h3>尚未绑定任何 ChatGPT Plus 账号</h3>
+          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 20px;">
+            点击右上角「登录 / 绑定 ChatGPT Plus」登录你的个人会员账号，即可在此实时查看该账号的 Codex 5小时额度与重置倒计时。
+          </p>
+          <button class="btn btn-primary" onclick="openChatgptModal()">
+            立即登录 ChatGPT Plus
+          </button>
         </div>
-
-        <div style="margin: 24px 0 12px; display: flex; justify-content: space-between; align-items: center;">
-          <h3 style="font-size: 16px; font-weight: 700;">🟢 活跃与调度中的 OpenAI / Plus 后端</h3>
-          <span style="font-size: 12px; color: var(--text-muted);">由 sub2API 驱动负载调度</span>
-        </div>
-
-        <div class="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>账号名称</th>
-                <th>类型 / Plan</th>
-                <th>优先级</th>
-                <th>倍率</th>
-                <th>最近调用</th>
-                <th>限额 / 状态</th>
-              </tr>
-            </thead>
-            <tbody>
       `;
+    }
 
-      if (backends.length === 0) {
-        html += `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);">暂无活跃账号</td></tr>`;
-      } else {
-        for (const b of backends) {
-          const isLimited = Boolean(b.rate_limited_at);
+    function renderChatgptCards(items) {
+      const area = document.getElementById("contentArea");
+      let html = '<div class="account-grid">';
+
+      for (const item of items) {
+        const email = item.email || "未命名账号";
+        const isActive = Boolean(item.isActive);
+        const isError = item.status === "error";
+        const isLimited = item.status === "limited";
+        const pct = item.five_hour_remaining !== undefined ? item.five_hour_remaining : 100;
+        const color = getColor(pct);
+        const countdown = formatCountdown(item.five_hour_reset);
+
+        html += `
+          <div class="account-card ${isActive ? 'active-account' : ''}">
+            <div class="card-header">
+              <div>
+                <div class="account-email">${email}</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                  ChatGPT ${(item.plan || 'Plus').toUpperCase()} · 个人会员
+                </div>
+              </div>
+              <span class="badge ${isLimited ? 'badge-danger' : (isActive ? 'badge-active' : 'badge-normal')}">
+                ${isLimited ? '已触限 429' : (isActive ? '活跃账号' : '待命')}
+              </span>
+            </div>
+        `;
+
+        if (isError) {
           html += `
-            <tr>
-              <td style="font-weight: 600;">${b.name || '未命名'}</td>
-              <td><span class="badge ${b.plan === 'plus' ? 'badge-active' : 'badge-normal'}">${b.plan ? b.plan.toUpperCase() : b.type}</span></td>
-              <td>${b.priority || 1}</td>
-              <td style="font-family: monospace;">${b.rate_multiplier}x</td>
-              <td style="font-size: 12px; color: var(--text-muted);">${formatTime(b.last_used_at)}</td>
-              <td>
-                ${isLimited ? '<span style="color: var(--danger); font-size: 11px;">⚠️ 曾触发 429</span>' : '<span style="color: var(--success); font-size: 11px;">● 活跃就绪</span>'}
-              </td>
-            </tr>
+            <div style="padding: 12px; background: rgba(239, 68, 68, 0.1); border-radius: 8px; color: var(--danger); font-size: 12px; margin: 10px 0;">
+              ${item.error || 'Token 可能已失效，请重新授权'}
+            </div>
           `;
+        } else {
+          html += `
+            <div class="group-section">
+              <div class="group-title">
+                <span>Codex / GPT-4o / GPT-5 配额</span>
+              </div>
+              
+              <div class="limit-row">
+                <div>
+                  <div class="limit-label">Five Hour Limit Remaining</div>
+                  <div class="limit-sub">5小时窗口重置: ${countdown ? countdown : '额度充沛就绪'}</div>
+                </div>
+                <div class="limit-value-box">
+                  <span class="limit-pct" style="color: ${color};">${pct}%</span>
+                  <div class="ring-indicator" style="border-color: ${color};"></div>
+                </div>
+              </div>
+            </div>
+          `;
+
+          if (item.seven_day_remaining !== null && item.seven_day_remaining !== undefined) {
+            const pct7d = item.seven_day_remaining;
+            const col7d = getColor(pct7d);
+            const cd7d = formatCountdown(item.seven_day_reset);
+            html += `
+              <div class="group-section" style="margin-top: -4px;">
+                <div class="limit-row">
+                  <div>
+                    <div class="limit-label">Weekly Limit Remaining</div>
+                    <div class="limit-sub">周窗口重置: ${cd7d ? cd7d : '充沛'}</div>
+                  </div>
+                  <div class="limit-value-box">
+                    <span class="limit-pct" style="color: ${col7d};">${pct7d}%</span>
+                    <div class="ring-indicator" style="border-color: ${col7d};"></div>
+                  </div>
+                </div>
+              </div>
+            `;
+          }
         }
+
+        html += `
+            <div class="card-footer">
+              ${!isActive ? `<button class="btn-switch" onclick="switchChatgptAccount('${email}')">设为主力</button>` : '<span style="color:var(--primary);font-size:11px;">● 当前主力</span>'}
+              <button class="btn-card" onclick="deleteChatgptAccount('${email}')">移除账号</button>
+            </div>
+          </div>
+        `;
       }
 
-      html += `
-            </tbody>
-          </table>
-        </div>
-
-        <div style="margin: 20px 0 12px;">
-          <h3 style="font-size: 16px; font-weight: 700;">📊 过去 24 小时模型调用分布</h3>
-        </div>
-
-        <div class="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>模型名称</th>
-                <th>调用次数</th>
-                <th>输入 Tokens</th>
-                <th>输出 Tokens</th>
-              </tr>
-            </thead>
-            <tbody>
-      `;
-
-      if (models.length === 0) {
-        html += `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);">暂无调用分布记录</td></tr>`;
-      } else {
-        for (const m of models) {
-          html += `
-            <tr>
-              <td style="font-family: monospace; font-weight: 600; color: var(--primary);">${m.model}</td>
-              <td>${m.count} 次</td>
-              <td style="font-family: monospace;">${formatTokens(m.in_tok || 0)}</td>
-              <td style="font-family: monospace;">${formatTokens(m.out_tok || 0)}</td>
-            </tr>
-          `;
-        }
-      }
-
-      html += `
-            </tbody>
-          </table>
-        </div>
-      `;
-
+      html += '</div>';
       area.innerHTML = html;
     }
 
-    function formatTokens(num) {
-      if (!num) return "0";
-      if (num > 1000000) return (num / 1000000).toFixed(2) + "M";
-      if (num > 1000) return (num / 1000).toFixed(1) + "k";
-      return num.toString();
+    // ChatGPT Modal 逻辑
+    async function loadChatgptAuthUrl() {
+      try {
+        const res = await fetch("/quota/api/chatgpt/login-url");
+        const data = await res.json();
+        chatgptAuthUrl = data.auth_url;
+        chatgptAuthState = data.state;
+      } catch (e) {
+        console.error("Failed to load chatgpt auth URL", e);
+      }
     }
 
-    function formatTime(isoStr) {
-      if (!isoStr) return "从未调用";
+    function openChatgptModal() {
+      document.getElementById("chatgptModal").classList.add("show");
+      loadChatgptAuthUrl();
+    }
+
+    function closeChatgptModal() {
+      document.getElementById("chatgptModal").classList.remove("show");
+      document.getElementById("chatgptCallbackInput").value = "";
+      document.getElementById("chatgptTokenInput").value = "";
+    }
+
+    function switchChatgptMethod(m) {
+      document.getElementById("subtabOauthBtn").classList.toggle("active", m === "oauth");
+      document.getElementById("subtabTokenBtn").classList.toggle("active", m === "token");
+      document.getElementById("methodOauthArea").style.display = (m === "oauth") ? "block" : "none";
+      document.getElementById("methodTokenArea").style.display = (m === "token") ? "block" : "none";
+    }
+
+    function openChatgptAuthUrl() {
+      if (!chatgptAuthUrl) {
+        alert("授权链接生成中，请稍后再试...");
+        return;
+      }
+      window.open(chatgptAuthUrl, "_blank");
+    }
+
+    async function submitChatgptOauth() {
+      const url = document.getElementById("chatgptCallbackInput").value.trim();
+      if (!url) {
+        alert("请先粘贴跳转后的完整 localhost:1455 回调地址！");
+        return;
+      }
+      const btn = document.getElementById("submitChatgptOauthBtn");
+      btn.disabled = true;
+      btn.innerText = "正在换取 Token...";
       try {
-        const d = new Date(isoStr);
-        return d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+        const res = await fetch("/quota/api/chatgpt/complete-oauth", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({url, state: chatgptAuthState})
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          alert(data.message);
+          closeChatgptModal();
+          fetchChatgptData(true);
+        } else {
+          alert("绑定失败：" + (data.detail || JSON.stringify(data)));
+        }
       } catch (e) {
-        return isoStr;
+        alert("网络请求失败：" + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "完成授权绑定";
+      }
+    }
+
+    async function submitChatgptToken() {
+      const raw = document.getElementById("chatgptTokenInput").value.trim();
+      if (!raw) {
+        alert("请先粘贴 Token 或 Session 数据！");
+        return;
+      }
+      const btn = document.getElementById("submitChatgptTokenBtn");
+      btn.disabled = true;
+      btn.innerText = "正在解析保存...";
+      try {
+        const res = await fetch("/quota/api/chatgpt/save-session", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({raw_data: raw})
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          alert(data.message);
+          closeChatgptModal();
+          fetchChatgptData(true);
+        } else {
+          alert("添加失败：" + (data.detail || JSON.stringify(data)));
+        }
+      } catch (e) {
+        alert("网络请求失败：" + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "确认添加";
+      }
+    }
+
+    async function switchChatgptAccount(email) {
+      try {
+        const res = await fetch("/quota/api/chatgpt/accounts/switch", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({email})
+        });
+        if (res.ok) fetchChatgptData(false);
+      } catch (e) {
+        console.error("switch failed", e);
+      }
+    }
+
+    async function deleteChatgptAccount(email) {
+      if (!confirm(`确定要移除 ChatGPT Plus 账号 ${email} 吗？`)) return;
+      try {
+        const res = await fetch(`/quota/api/chatgpt/accounts/${encodeURIComponent(email)}`, {method: "DELETE"});
+        if (res.ok) fetchChatgptData(true);
+      } catch (e) {
+        alert("移除失败：" + e.message);
       }
     }
 
@@ -740,7 +929,7 @@
       try {
         const res = await fetch(`/quota/api/quota?refresh=${forceRefresh ? 'true' : 'false'}`);
         const data = await res.json();
-        if (Array.isArray(data)) {
+        if (Array.isArray(data) && data.length > 0) {
           renderGoogleCards(data);
         } else {
           const statusRes = await fetch("/quota/api/status");
@@ -748,54 +937,29 @@
           renderGoogleCards(statusData.accounts || []);
         }
       } catch (err) {
-        area.innerHTML = `<div class="empty-state" style="color: var(--danger);">加载失败：${err.message}</div>`;
+        area.innerHTML = `<div class="empty-state" style="color: var(--danger);">加载 Google 数据失败：${err.message}</div>`;
       }
     }
 
-    function getColor(pct) {
-      if (pct === undefined || pct === null) return "var(--text-muted)";
-      if (pct > 50) return "#22c55e";
-      if (pct > 20) return "#f59e0b";
-      return "#ef4444";
-    }
-
-    function formatCountdown(isoString) {
-      if (!isoString) return "";
-      try {
-        const target = new Date(isoString).getTime();
-        const diff = target - Date.now();
-        if (diff <= 0) return "已就绪";
-        const mins = Math.floor(diff / (60 * 1000));
-        const hours = Math.floor(mins / 60);
-        const remMins = mins % 60;
-        if (hours > 0) {
-          return `${hours}h ${remMins}m`;
-        }
-        return `${remMins}m`;
-      } catch (e) {
-        return "";
-      }
-    }
-
-    function renderGoogleCards(accountsData) {
+    function renderGoogleCards(items) {
       const area = document.getElementById("contentArea");
-      if (!accountsData || accountsData.length === 0) {
+      if (items.length === 0) {
         area.innerHTML = `
           <div class="empty-state">
-            <h3>尚未配置任何 Google 账号</h3>
-            <p style="color: var(--text-muted); font-size: 13px; margin: 10px 0 16px;">
-              点击上方「添加谷歌账号」，授权后即可在此实时监控各账号额度。
+            <h3>尚未绑定任何 Google 账号</h3>
+            <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+              点击右上角「添加谷歌账号」，完成 Google 官方授权即可查看配额。
             </p>
-            <button class="btn btn-primary" onclick="openAddModal()">立即添加第一个账号</button>
+            <button class="btn btn-primary" onclick="openAddModal()">立即添加</button>
           </div>
         `;
         return;
       }
 
       let html = '<div class="account-grid">';
-      for (const item of accountsData) {
-        const email = item.email || "未知账号";
-        const isActive = item.isActive;
+      for (const item of items) {
+        const email = item.email || "未命名账号";
+        const isActive = Boolean(item.isActive);
         const groups = item.groups || [];
         const isError = item.status === "error";
 
@@ -864,7 +1028,7 @@
       try {
         const res = await fetch("/quota/api/login-url");
         const data = await res.json();
-        authUrl = data.login_url;
+        googleAuthUrl = data.login_url;
       } catch (e) {
         console.error("Failed to load auth URL", e);
       }
@@ -880,11 +1044,11 @@
     }
 
     function openGoogleAuth() {
-      if (!authUrl) {
+      if (!googleAuthUrl) {
         alert("授权地址加载中，请稍等...");
         return;
       }
-      window.open(authUrl, "_blank");
+      window.open(googleAuthUrl, "_blank");
     }
 
     async function submitAuthCode() {
@@ -948,9 +1112,39 @@
       }
     }
 
+    // ==================== 通用辅助函数 ====================
+
+    function getColor(pct) {
+      if (pct > 50) return "var(--success)";
+      if (pct > 20) return "var(--warning)";
+      return "var(--danger)";
+    }
+
+    function formatCountdown(resetTimeStr) {
+      if (!resetTimeStr) return "";
+      try {
+        const resetDate = new Date(resetTimeStr);
+        const diffMs = resetDate.getTime() - Date.now();
+        if (diffMs <= 0) return "即将重置";
+        const totalMinutes = Math.floor(diffMs / 60000);
+        const hours = Math.floor(totalMinutes / 60);
+        const mins = totalMinutes % 60;
+        if (hours > 24) {
+          const days = Math.floor(hours / 24);
+          const remHours = hours % 24;
+          return `${days}天 ${remHours}小时`;
+        }
+        if (hours > 0) return `${hours}小时 ${mins}分`;
+        return `${mins}分钟`;
+      } catch (e) {
+        return "";
+      }
+    }
+
     window.addEventListener("DOMContentLoaded", () => {
       switchTab("codex");
       loadAuthUrl();
+      loadChatgptAuthUrl();
     });
   </script>
 </body>
