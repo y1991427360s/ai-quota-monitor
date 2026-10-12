@@ -4,8 +4,54 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI 配额与 Codex 监控 - SEN 工具箱</title>
+  <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <script>
+  (function() {
+      const saved = localStorage.getItem('sen_tools_theme');
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (saved === 'dark' || (!saved && prefersDark)) {
+          document.documentElement.classList.add('dark');
+      }
+  })();
+  </script>
   <style>
     :root {
+      --bg: #f8fafc;
+      --card-bg: rgba(255, 255, 255, 0.95);
+      --card-border: #e2e8f0;
+      --primary: #0284c7;
+      --primary-hover: #0369a1;
+      --accent: #6366f1;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --section-bg: #f1f5f9;
+      --section-border: #e2e8f0;
+      --limit-text: #1e293b;
+      --modal-bg: #ffffff;
+      --input-bg: #ffffff;
+      --input-border: #cbd5e1;
+      --input-text: #0f172a;
+      --step-bg: #f8fafc;
+      --step-text: #334155;
+      --subtabs-bg: #e2e8f0;
+      --badge-active-bg: rgba(2, 132, 199, 0.12);
+      --badge-active-border: rgba(2, 132, 199, 0.35);
+      --badge-normal-bg: rgba(16, 185, 129, 0.12);
+      --badge-normal-border: rgba(16, 185, 129, 0.35);
+      --badge-warn-bg: rgba(245, 158, 11, 0.12);
+      --badge-warn-border: rgba(245, 158, 11, 0.35);
+      --badge-danger-bg: rgba(239, 68, 68, 0.12);
+      --badge-danger-border: rgba(239, 68, 68, 0.35);
+      --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
+      --shadow-card: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --radius: 14px;
+    }
+
+    html.dark {
       --bg: #090d16;
       --card-bg: rgba(18, 24, 38, 0.85);
       --card-border: rgba(255, 255, 255, 0.08);
@@ -14,10 +60,26 @@
       --accent: #818cf8;
       --text: #f1f5f9;
       --text-muted: #94a3b8;
-      --success: #10b981;
-      --warning: #f59e0b;
-      --danger: #ef4444;
-      --radius: 14px;
+      --section-bg: rgba(0, 0, 0, 0.35);
+      --section-border: rgba(255, 255, 255, 0.04);
+      --limit-text: #e2e8f0;
+      --modal-bg: #111827;
+      --input-bg: rgba(0, 0, 0, 0.4);
+      --input-border: rgba(255, 255, 255, 0.1);
+      --input-text: #f8fafc;
+      --step-bg: rgba(255, 255, 255, 0.03);
+      --step-text: #cbd5e1;
+      --subtabs-bg: rgba(0, 0, 0, 0.3);
+      --badge-active-bg: rgba(56, 189, 248, 0.2);
+      --badge-active-border: rgba(56, 189, 248, 0.4);
+      --badge-normal-bg: rgba(16, 185, 129, 0.2);
+      --badge-normal-border: rgba(16, 185, 129, 0.4);
+      --badge-warn-bg: rgba(245, 158, 11, 0.2);
+      --badge-warn-border: rgba(245, 158, 11, 0.4);
+      --badge-danger-bg: rgba(239, 68, 68, 0.2);
+      --badge-danger-border: rgba(239, 68, 68, 0.4);
+      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+      --shadow-card: 0 18px 40px rgba(0, 0, 0, 0.4);
     }
 
     * {
@@ -95,6 +157,30 @@
       align-items: center;
     }
 
+    /* Theme Switch Button */
+    .theme-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 35px;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid var(--card-border);
+      background: var(--card-bg);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .theme-btn:hover {
+      border-color: var(--text-muted);
+      transform: translateY(-1px);
+    }
+
     .btn {
       display: inline-flex;
       align-items: center;
@@ -111,8 +197,12 @@
 
     .btn-primary {
       background: var(--primary);
-      color: #030712;
+      color: #ffffff;
       font-weight: 600;
+    }
+
+    html.dark .btn-primary {
+      color: #030712;
     }
 
     .btn-primary:hover {
@@ -121,14 +211,15 @@
     }
 
     .btn-secondary {
-      background: rgba(255, 255, 255, 0.05);
+      background: var(--card-bg);
       color: var(--text);
       border: 1px solid var(--card-border);
+      box-shadow: var(--shadow-sm);
     }
 
     .btn-secondary:hover {
-      background: rgba(255, 255, 255, 0.1);
-      border-color: rgba(255, 255, 255, 0.2);
+      background: var(--section-bg);
+      border-color: var(--card-border);
     }
 
     .btn-danger {
@@ -145,7 +236,7 @@
     .tabs-bar {
       display: flex;
       gap: 8px;
-      background: rgba(0, 0, 0, 0.25);
+      background: var(--subtabs-bg);
       padding: 4px;
       border-radius: 12px;
       border: 1px solid var(--card-border);
@@ -171,8 +262,8 @@
     .tab-btn.active {
       background: var(--card-bg);
       color: var(--primary);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-      border: 1px solid rgba(56, 189, 248, 0.2);
+      box-shadow: var(--shadow-sm);
+      border: 1px solid var(--badge-active-border);
     }
 
     .account-grid {
@@ -186,6 +277,7 @@
       border: 1px solid var(--card-border);
       border-radius: var(--radius);
       padding: 18px;
+      box-shadow: var(--shadow-card);
       backdrop-filter: blur(12px);
       transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
       display: flex;
@@ -209,7 +301,7 @@
       align-items: flex-start;
       margin-bottom: 16px;
       padding-bottom: 12px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      border-bottom: 1px solid var(--section-border);
     }
 
     .account-email {
@@ -230,41 +322,41 @@
     }
 
     .badge-active {
-      background: rgba(56, 189, 248, 0.2);
+      background: var(--badge-active-bg);
       color: var(--primary);
-      border: 1px solid rgba(56, 189, 248, 0.4);
+      border: 1px solid var(--badge-active-border);
     }
 
     .badge-normal {
-      background: rgba(16, 185, 129, 0.2);
+      background: var(--badge-normal-bg);
       color: var(--success);
-      border: 1px solid rgba(16, 185, 129, 0.4);
+      border: 1px solid var(--badge-normal-border);
     }
 
     .badge-warn {
-      background: rgba(245, 158, 11, 0.2);
+      background: var(--badge-warn-bg);
       color: var(--warning);
-      border: 1px solid rgba(245, 158, 11, 0.4);
+      border: 1px solid var(--badge-warn-border);
     }
 
     .badge-danger {
-      background: rgba(239, 68, 68, 0.2);
+      background: var(--badge-danger-bg);
       color: var(--danger);
-      border: 1px solid rgba(239, 68, 68, 0.4);
+      border: 1px solid var(--badge-danger-border);
     }
 
     .group-section {
-      background: rgba(0, 0, 0, 0.35);
+      background: var(--section-bg);
       border-radius: 10px;
       padding: 14px 16px;
       margin-bottom: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--section-border);
     }
 
     .group-title {
       font-size: 13px;
       font-weight: 700;
-      color: #94a3b8;
+      color: var(--text-muted);
       text-transform: uppercase;
       letter-spacing: 0.6px;
       margin-bottom: 12px;
@@ -287,7 +379,7 @@
     .limit-label {
       font-size: 13px;
       font-weight: 500;
-      color: #e2e8f0;
+      color: var(--limit-text);
     }
 
     .limit-sub {
@@ -321,7 +413,7 @@
       align-items: center;
       margin-top: 10px;
       padding-top: 12px;
-      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      border-top: 1px solid var(--section-border);
       font-size: 12px;
     }
 
@@ -365,7 +457,7 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.75);
+      background: rgba(0, 0, 0, 0.65);
       backdrop-filter: blur(6px);
       display: none;
       align-items: center;
@@ -379,13 +471,13 @@
     }
 
     .modal {
-      background: #111827;
+      background: var(--modal-bg);
       border: 1px solid var(--card-border);
       border-radius: var(--radius);
       max-width: 560px;
       width: 100%;
       padding: 24px;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
     }
 
     .modal-title {
@@ -395,13 +487,14 @@
     }
 
     .step-box {
-      background: rgba(255, 255, 255, 0.03);
+      background: var(--step-bg);
+      border: 1px solid var(--section-border);
       border-radius: 8px;
       padding: 12px 14px;
       margin-bottom: 14px;
       font-size: 13px;
       line-height: 1.6;
-      color: #cbd5e1;
+      color: var(--step-text);
     }
 
     .step-box ol {
@@ -410,11 +503,11 @@
 
     .input-field {
       width: 100%;
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid var(--card-border);
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
       border-radius: 8px;
       padding: 10px 12px;
-      color: white;
+      color: var(--input-text);
       font-size: 13px;
       margin-bottom: 14px;
       outline: none;
@@ -428,11 +521,11 @@
     .textarea-field {
       width: 100%;
       min-height: 90px;
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid var(--card-border);
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
       border-radius: 8px;
       padding: 10px 12px;
-      color: white;
+      color: var(--input-text);
       font-size: 12px;
       font-family: monospace;
       margin-bottom: 14px;
@@ -477,7 +570,7 @@
       display: flex;
       gap: 6px;
       margin-bottom: 16px;
-      background: rgba(0, 0, 0, 0.3);
+      background: var(--subtabs-bg);
       padding: 4px;
       border-radius: 8px;
     }
@@ -498,6 +591,288 @@
     .modal-subtab-btn.active {
       background: var(--card-bg);
       color: var(--primary);
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* 主要模型用量监控面板样式 */
+    .models-section {
+      background: var(--section-bg);
+      border: 1px solid var(--section-border);
+      border-radius: 10px;
+      padding: 12px;
+      margin-top: 10px;
+      transition: all 0.2s ease;
+    }
+
+    .models-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .models-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .models-badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+
+    .badge-used {
+      background: rgba(2, 132, 199, 0.15);
+      color: var(--primary);
+      border: 1px solid rgba(2, 132, 199, 0.3);
+    }
+
+    .badge-idle {
+      background: rgba(100, 116, 139, 0.15);
+      color: var(--text-muted);
+      border: 1px solid rgba(100, 116, 139, 0.25);
+    }
+
+    .models-toggle-btn {
+      background: transparent;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      font-size: 11px;
+      padding: 2px 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.2s;
+    }
+
+    .models-toggle-btn:hover {
+      background: var(--card-bg);
+      color: var(--text);
+      border-color: var(--primary);
+    }
+
+    .models-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .model-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      font-size: 12px;
+      gap: 8px;
+      min-width: 0;
+      box-sizing: border-box;
+      transition: background 0.15s;
+    }
+
+    html:not(.dark) .model-row {
+      background: rgba(0, 0, 0, 0.025);
+      border: 1px solid rgba(0, 0, 0, 0.04);
+    }
+
+    .model-row.is-idle {
+      opacity: 0.65;
+    }
+
+    .model-row.is-idle:hover {
+      opacity: 1;
+    }
+
+    .model-info-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .provider-tag {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 4px;
+      border-radius: 3px;
+      letter-spacing: 0.2px;
+      text-transform: uppercase;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+
+    .provider-google {
+      background: rgba(56, 189, 248, 0.15);
+      color: #0284c7;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+    html.dark .provider-google {
+      color: #38bdf8;
+    }
+
+    .provider-anthropic {
+      background: rgba(168, 85, 247, 0.15);
+      color: #9333ea;
+      border: 1px solid rgba(168, 85, 247, 0.35);
+    }
+    html.dark .provider-anthropic {
+      color: #c084fc;
+    }
+
+    .provider-openai {
+      background: rgba(16, 185, 129, 0.15);
+      color: #059669;
+      border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+    html.dark .provider-openai {
+      color: #34d399;
+    }
+
+    .model-id-code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-weight: 600;
+      font-size: 11px;
+      color: var(--text);
+      background: rgba(148, 163, 184, 0.12);
+      padding: 1.5px 5px;
+      border-radius: 4px;
+      letter-spacing: -0.2px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      flex-shrink: 1;
+    }
+    html.dark .model-id-code {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+
+    .tier-badge {
+      font-size: 9.5px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+      letter-spacing: 0.1px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .tier-tiered {
+      background: rgba(59, 130, 246, 0.15);
+      color: #2563eb;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+    html.dark .tier-tiered {
+      color: #60a5fa;
+    }
+    .tier-high {
+      background: rgba(16, 185, 129, 0.15);
+      color: #059669;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    html.dark .tier-high {
+      color: #34d399;
+    }
+    .tier-low {
+      background: rgba(245, 158, 11, 0.15);
+      color: #d97706;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+    html.dark .tier-low {
+      color: #fbbf24;
+    }
+    .tier-thinking {
+      background: rgba(168, 85, 247, 0.15);
+      color: #9333ea;
+      border: 1px solid rgba(168, 85, 247, 0.3);
+    }
+    html.dark .tier-thinking {
+      color: #c084fc;
+    }
+    .tier-agent {
+      background: rgba(236, 72, 153, 0.15);
+      color: #db2777;
+      border: 1px solid rgba(236, 72, 153, 0.3);
+    }
+    html.dark .tier-agent {
+      color: #f472b6;
+    }
+    .tier-codex {
+      background: rgba(16, 185, 129, 0.15);
+      color: #059669;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    html.dark .tier-codex {
+      color: #34d399;
+    }
+    .tier-medium {
+      background: rgba(100, 116, 139, 0.15);
+      color: #475569;
+      border: 1px solid rgba(100, 116, 139, 0.3);
+    }
+    html.dark .tier-medium {
+      color: #94a3b8;
+    }
+    .tier-preview {
+      background: rgba(14, 165, 233, 0.15);
+      color: #0284c7;
+      border: 1px solid rgba(14, 165, 233, 0.3);
+    }
+    html.dark .tier-preview {
+      color: #38bdf8;
+    }
+
+    .model-info-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .model-pct-pill {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-weight: 700;
+      font-size: 11.5px;
+      padding: 1.5px 6px;
+      border-radius: 4px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .model-reset-cd {
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .all-idle-notice {
+      padding: 8px 10px;
+      font-size: 11px;
+      color: var(--text-muted);
+      border-radius: 6px;
+      background: rgba(100, 116, 139, 0.08);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .all-idle-notice:hover {
+      background: rgba(100, 116, 139, 0.15);
+      color: var(--text);
     }
   </style>
 </head>
@@ -514,6 +889,10 @@
         </div>
       </div>
       <div class="header-actions">
+        <button class="theme-btn" id="themeToggle" onclick="toggleTheme()" aria-label="切换浅色/暗色模式">
+          <span id="themeIcon">🌓</span>
+          <span id="themeText">模式</span>
+        </button>
         <button class="btn btn-secondary" onclick="fetchActiveTab(true)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
           刷新
@@ -531,15 +910,23 @@
       </div>
     </header>
 
-    <!-- Tab 导航 -->
-    <div class="tabs-bar">
-      <button class="tab-btn active" id="tabCodexBtn" onclick="switchTab('codex')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
-        ChatGPT Plus / Codex 额度
-      </button>
-      <button class="tab-btn" id="tabGoogleBtn" onclick="switchTab('google')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/></svg>
-        Google Antigravity
+    <!-- Tab 导航与模型过滤栏 -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+      <div class="tabs-bar" style="margin-bottom: 0;">
+        <button class="tab-btn active" id="tabCodexBtn" onclick="switchTab('codex')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+          ChatGPT Plus / Codex 额度
+        </button>
+        <button class="tab-btn" id="tabGoogleBtn" onclick="switchTab('google')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/></svg>
+          Google Antigravity
+        </button>
+      </div>
+
+      <!-- 全局模型过滤开关按钮 -->
+      <button class="btn btn-secondary" id="globalModelFilterBtn" onclick="toggleGlobalHideUnused()" title="点击切换隐藏/显示未使用的主要模型">
+        <span id="globalModelFilterIcon">👁</span>
+        <span id="globalModelFilterText">隐藏未用模型 (已开启)</span>
       </button>
     </div>
 
@@ -642,6 +1029,149 @@
     let chatgptAuthUrl = "";
     let chatgptAuthState = "";
 
+    // 模型过滤与展示状态
+    let globalHideUnused = localStorage.getItem('sen_quota_hide_unused') !== 'false'; // 默认开启隐藏未用
+    let cardExpandedMap = {}; // 记录单个卡片的主动展开覆盖状态
+    let lastRenderedGoogleItems = [];
+    let lastRenderedChatgptItems = [];
+
+    function updateGlobalFilterUI() {
+      const btn = document.getElementById("globalModelFilterBtn");
+      const icon = document.getElementById("globalModelFilterIcon");
+      const text = document.getElementById("globalModelFilterText");
+      if (!btn) return;
+      if (globalHideUnused) {
+        icon.textContent = "👁";
+        text.textContent = "隐藏未用模型 (已开启)";
+        btn.classList.add("btn-secondary");
+      } else {
+        icon.textContent = "👁‍🗨";
+        text.textContent = "显示全部模型 (未隐藏)";
+        btn.classList.remove("btn-secondary");
+      }
+    }
+
+    function toggleGlobalHideUnused() {
+      globalHideUnused = !globalHideUnused;
+      localStorage.setItem('sen_quota_hide_unused', globalHideUnused ? 'true' : 'false');
+      cardExpandedMap = {};
+      updateGlobalFilterUI();
+      if (currentTab === "google" && lastRenderedGoogleItems.length > 0) {
+        renderGoogleCards(lastRenderedGoogleItems);
+      } else if (currentTab === "codex" && lastRenderedChatgptItems.length > 0) {
+        renderChatgptCards(lastRenderedChatgptItems);
+      }
+    }
+
+    function toggleCardModels(cardKey, forceShow = false) {
+      const currentlyShowingAll = cardExpandedMap[cardKey] !== undefined ? cardExpandedMap[cardKey] : !globalHideUnused;
+      cardExpandedMap[cardKey] = forceShow ? true : !currentlyShowingAll;
+      if (currentTab === "google" && lastRenderedGoogleItems.length > 0) {
+        renderGoogleCards(lastRenderedGoogleItems);
+      } else if (currentTab === "codex" && lastRenderedChatgptItems.length > 0) {
+        renderChatgptCards(lastRenderedChatgptItems);
+      }
+    }
+
+    function renderModelsSection(models, cardKey) {
+      if (!models || models.length === 0) return '';
+
+      const usedModels = models.filter(m => m.used);
+      const usedCount = usedModels.length;
+      const totalCount = models.length;
+
+      const isCardOverridden = cardExpandedMap[cardKey];
+      const showAll = isCardOverridden !== undefined ? isCardOverridden : !globalHideUnused;
+      const displayList = showAll ? models : usedModels;
+
+      let listHtml = '';
+      if (!showAll && usedCount === 0) {
+        listHtml = `
+          <div class="all-idle-notice" onclick="toggleCardModels('${cardKey}', true)" title="点击展开查看全部后端路由模型">
+            <span>⚡ 全部 ${totalCount} 款后端路由模型均 100% 满额待命</span>
+            <span style="color: var(--primary); font-weight: 600;">展开 ▾</span>
+          </div>
+        `;
+      } else {
+        for (const m of displayList) {
+          const pct = m.remainingPercent !== undefined ? m.remainingPercent : 100;
+          const color = getColor(pct);
+          const isUsed = Boolean(m.used);
+          const countdown = m.resetTime ? formatCountdown(m.resetTime) : '';
+          const modelIdStr = m.id || m.name || '';
+          const tooltip = m.displayName && m.displayName !== modelIdStr 
+            ? `${m.displayName} (${modelIdStr})${countdown ? ' · 倒计时: ' + countdown : ''}` 
+            : `${modelIdStr}${countdown ? ' · 倒计时: ' + countdown : ''}`;
+
+          let providerClass = 'provider-google';
+          if (m.provider === 'Anthropic') providerClass = 'provider-anthropic';
+          else if (m.provider === 'OpenAI') providerClass = 'provider-openai';
+
+          let tierClass = '';
+          const tierLower = (m.tier || '').toLowerCase();
+          if (tierLower === 'tiered') tierClass = 'tier-tiered';
+          else if (tierLower === 'high') tierClass = 'tier-high';
+          else if (tierLower === 'low') tierClass = 'tier-low';
+          else if (tierLower === 'thinking') tierClass = 'tier-thinking';
+          else if (tierLower === 'agent') tierClass = 'tier-agent';
+          else if (tierLower === 'codex') tierClass = 'tier-codex';
+          else if (tierLower === 'medium') tierClass = 'tier-medium';
+          else if (tierLower === 'preview') tierClass = 'tier-preview';
+
+          const tierBadgeHtml = (m.tagLabel || m.tier) ? `<span class="tier-badge ${tierClass}">${m.tagLabel || m.tier}</span>` : '';
+
+          listHtml += `
+            <div class="model-row ${isUsed ? 'is-used' : 'is-idle'}" title="${tooltip}">
+              <div class="model-info-left">
+                <span class="provider-tag ${providerClass}">${m.provider || 'AI'}</span>
+                <code class="model-id-code">${modelIdStr}</code>
+                ${tierBadgeHtml}
+              </div>
+              <div class="model-info-right">
+                ${isUsed ? `
+                  <span class="model-pct-pill" style="color: ${color}; background: rgba(0,0,0,0.06);">${pct}%</span>
+                ` : `
+                  <span class="model-pct-pill" style="color: var(--text-muted); background: rgba(100,116,139,0.1);">100%</span>
+                `}
+              </div>
+            </div>
+          `;
+        }
+
+        if (!showAll && usedCount < totalCount) {
+          const idleCount = totalCount - usedCount;
+          listHtml += `
+            <div class="all-idle-notice" style="margin-top: 4px; padding: 4px 8px;" onclick="toggleCardModels('${cardKey}', true)" title="点击展开查看所有模型">
+              <span>⚡ 另有 ${idleCount} 款模型 100% 待命</span>
+              <span style="color: var(--primary); font-weight: 600;">展开 ▾</span>
+            </div>
+          `;
+        }
+      }
+
+      const toggleBtnText = showAll ? '仅看已用' : `展开全部 (${totalCount})`;
+
+      return `
+        <div class="models-section">
+          <div class="models-header">
+            <div class="models-title">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 3.36 2.06 6.24 5 7.42V20a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2.58c2.94-1.18 5-4.06 5-7.42a8 8 0 0 0-8-8z"/><path d="M9 13h6"/><path d="M10 17h4"/></svg>
+              <span>后端路由模型</span>
+              <span class="models-badge ${usedCount > 0 ? 'badge-used' : 'badge-idle'}">
+                ${usedCount > 0 ? `已调用 ${usedCount} 款` : '全部待命'}
+              </span>
+            </div>
+            <button class="models-toggle-btn" onclick="toggleCardModels('${cardKey}')" title="切换显示/隐藏未使用的模型">
+              ${toggleBtnText}
+            </button>
+          </div>
+          <div class="models-list">
+            ${listHtml}
+          </div>
+        </div>
+      `;
+    }
+
     function switchTab(tab) {
       currentTab = tab;
       document.getElementById("tabCodexBtn").classList.toggle("active", tab === "codex");
@@ -708,6 +1238,7 @@
     }
 
     function renderChatgptCards(items) {
+      lastRenderedChatgptItems = items || [];
       const area = document.getElementById("contentArea");
       let html = '<div class="account-grid">';
 
@@ -884,6 +1415,8 @@
               </div>
             `;
           }
+          // 4. 主要模型用量监控面板
+          html += renderModelsSection(item.models, 'c_' + email);
         }
 
         html += `
@@ -1042,6 +1575,7 @@
     }
 
     function renderGoogleCards(items) {
+      lastRenderedGoogleItems = items || [];
       const area = document.getElementById("contentArea");
       if (items.length === 0) {
         area.innerHTML = `
@@ -1149,6 +1683,10 @@
                 ${weeklyHtml}
               </div>
             `;
+          }
+          // 主要模型用量监控面板
+          if (!isError && item.models && item.models.length > 0) {
+            html += renderModelsSection(item.models, 'g_' + email);
           }
         }
 
@@ -1291,7 +1829,31 @@
       }
     }
 
+    // ==================== 主题切换 (浅色 / 暗色模式) ====================
+    function updateThemeUI() {
+      const isDark = document.documentElement.classList.contains('dark');
+      const icon = document.getElementById('themeIcon');
+      const text = document.getElementById('themeText');
+      if (icon && text) {
+        if (isDark) {
+          icon.textContent = '🌙';
+          text.textContent = '暗色';
+        } else {
+          icon.textContent = '☀️';
+          text.textContent = '浅色';
+        }
+      }
+    }
+
+    function toggleTheme() {
+      const isDark = document.documentElement.classList.toggle('dark');
+      localStorage.setItem('sen_tools_theme', isDark ? 'dark' : 'light');
+      updateThemeUI();
+    }
+
     window.addEventListener("DOMContentLoaded", () => {
+      updateThemeUI();
+      updateGlobalFilterUI();
       switchTab("codex");
       loadAuthUrl();
       loadChatgptAuthUrl();

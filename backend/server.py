@@ -137,6 +137,184 @@ def refresh_account_token(acc: dict) -> str:
         acc["expiresAt"] = now_ms + (expires_in * 1000)
         return new_token
 
+CC_BLACKLIST = {
+    "chat_20706",
+    "chat_23310",
+    "tab_flash_lite_preview",
+    "tab_jump_flash_lite_preview",
+}
+
+# 核心主力路由模型定义（精选代表性主力模型，避免重复刷屏）
+PRIMARY_ROUTED_SPECS = [
+    ("gemini-3.8-flash-tiered", "Google", "Tiered", "Tiered 主力"),
+    ("gemini-3.6-flash-high",   "Google", "High",   "High 高推理"),
+    ("gemini-3.1-pro-high",     "Google", "High",   "High 高推理"),
+    ("claude-sonnet-4-6",       "Anthropic", "Thinking", "Thinking"),
+    ("claude-opus-4-6-thinking", "Anthropic", "Thinking", "Thinking"),
+    ("gpt-oss-120b-medium",     "OpenAI", "Medium", "Medium"),
+]
+
+def format_model_entry(key: str, val: dict, spec_tier: str = "", spec_tag: str = "") -> dict:
+    q_info = val.get("quotaInfo") or {}
+    rem = q_info.get("remainingFraction")
+    if rem is not None:
+        try:
+            pct = max(0, min(100, int(round(float(rem) * 100))))
+        except (ValueError, TypeError):
+            pct = 100
+    else:
+        pct = 100
+    reset_time = q_info.get("resetTime") or ""
+    used = (pct < 100)
+
+    if "claude" in key:
+        provider = "Anthropic"
+    elif "gpt" in key or "openai" in key:
+        provider = "OpenAI"
+    else:
+        provider = "Google"
+
+    tier = spec_tier or ""
+    tag_label = spec_tag or ""
+    if not tier:
+        if "-tiered" in key:
+            tier = "Tiered"
+            tag_label = "Tiered"
+        elif "-high" in key:
+            tier = "High"
+            tag_label = "High"
+        elif "-medium" in key:
+            tier = "Medium"
+            tag_label = "Medium"
+        elif "-extra-low" in key:
+            tier = "Low"
+            tag_label = "Extra-Low"
+        elif "-low" in key:
+            tier = "Low"
+            tag_label = "Low"
+        elif "-thinking" in key:
+            tier = "Thinking"
+            tag_label = "Thinking"
+        elif "-agent" in key:
+            tier = "Agent"
+            tag_label = "Agent"
+        elif "-lite" in key:
+            tier = "Lite"
+            tag_label = "Lite"
+        elif "claude" in key:
+            tier = "Thinking"
+            tag_label = "Thinking"
+
+    display_name = val.get("displayName") or key
+
+    return {
+        "id": key,                      # 真实后端路由模型原始 ID (如 gemini-3.8-flash-tiered)
+        "name": key,                    # 统一保持原始 ID
+        "displayName": display_name,    # 官方展示名称
+        "provider": provider,           # Google / Anthropic / OpenAI
+        "tier": tier,                   # Tier 级别
+        "tagLabel": tag_label,          # 徽章文本
+        "remainingPercent": pct,
+        "resetTime": reset_time,
+        "used": used,
+        "isPrimary": True
+    }
+
+def extract_primary_models(models_data: dict, fallback_groups: list = None) -> list:
+    """
+    提取真实后端路由模型 (保留完整 gemini-3.8-flash-tiered / gemini-3.6-flash-high 等后缀标识)
+    """
+    extracted = []
+    seen = set()
+
+    # 1. 优先提取核心主力模型
+    for spec in PRIMARY_ROUTED_SPECS:
+        key, provider, spec_tier, spec_tag = spec
+        matched_k = None
+        if key in models_data:
+            matched_k = key
+        else:
+            prefix = key.rsplit('-', 1)[0]
+            for k in models_data.keys():
+                if k.startswith(prefix) and k not in seen:
+                    matched_k = k
+                    break
+        if matched_k and matched_k in models_data and matched_k not in seen:
+            seen.add(matched_k)
+            entry = format_model_entry(matched_k, models_data[matched_k], spec_tier, spec_tag)
+            entry["isPrimary"] = True
+            extracted.append(entry)
+
+    # 2. 如果账号没有 3.8 或 3.6-high，检测是否有降级模型（如 gemini-3.6-flash-low 或 gemini-3.5-flash-extra-low）
+    has_flash = any("flash" in e["id"] for e in extracted)
+    if not has_flash:
+        for deg_key in ["gemini-3.6-flash-low", "gemini-3.5-flash-extra-low", "gemini-3.5-flash-low"]:
+            if deg_key in models_data and deg_key not in seen:
+                seen.add(deg_key)
+                entry = format_model_entry(deg_key, models_data[deg_key], "Low", "Low 降级")
+                entry["isPrimary"] = True
+                extracted.insert(0, entry)
+                break
+
+    # 3. 如果接口未返回模型列表或受限，基于全局分组 quota 智能推导兜底
+    if not extracted and fallback_groups:
+        gemini_pct = 100
+        gemini_rst = ""
+        claude_pct = 100
+        claude_rst = ""
+        for g in fallback_groups:
+            g_name = g.get("groupName", "")
+            fh = g.get("fiveHour") or {}
+            if "Gemini" in g_name:
+                gemini_pct = fh.get("percentage", 100)
+                gemini_rst = fh.get("resetTime", "")
+            elif "Claude" in g_name or "GPT" in g_name:
+                claude_pct = fh.get("percentage", 100)
+                claude_rst = fh.get("resetTime", "")
+
+        fallback_specs = [
+            ("gemini-3.8-flash-tiered", "Google", "Tiered", "Tiered 主力", gemini_pct, gemini_rst),
+            ("gemini-3.6-flash-high",   "Google", "High",   "High 高推理", gemini_pct, gemini_rst),
+            ("gemini-3.1-pro-high",     "Google", "High",   "High 高推理", gemini_pct, gemini_rst),
+            ("claude-sonnet-4-6",       "Anthropic", "Thinking", "Thinking", claude_pct, claude_rst),
+            ("claude-opus-4-6-thinking", "Anthropic", "Thinking", "Thinking", claude_pct, claude_rst),
+            ("gpt-oss-120b-medium",     "OpenAI", "Medium", "Medium", claude_pct, claude_rst),
+        ]
+        for fid, fprov, ftier, ftag, fpct, frst in fallback_specs:
+            extracted.append({
+                "id": fid,
+                "name": fid,
+                "displayName": fid,
+                "provider": fprov,
+                "tier": ftier,
+                "tagLabel": ftag,
+                "remainingPercent": fpct,
+                "resetTime": frst,
+                "used": (fpct < 100),
+                "isPrimary": True
+            })
+
+    return extracted
+
+def fetch_primary_models_probe(access_token: str, project_id: str = "aicode-consumers", fallback_groups: list = None) -> list:
+    url = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "User-Agent": "antigravity"
+    }
+    body = json.dumps({"project": project_id} if project_id else {}).encode()
+    try:
+        req = urllib.request.Request(url, data=body, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+            models_data = res.get("models", {})
+            return extract_primary_models(models_data, fallback_groups)
+    except Exception as e:
+        if ANTIGRAVITY_DEBUG:
+            print(f"[Antigravity Debug] fetch_primary_models_probe failed: {e}")
+    return extract_primary_models({}, fallback_groups)
+
 def fetch_single_probe(access_token: str, project_id: str = "aicode-consumers"):
     url = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
     headers = {
@@ -171,7 +349,8 @@ def fetch_single_probe(access_token: str, project_id: str = "aicode-consumers"):
             c_rem = m_claude["quotaInfo"].get("remainingFraction", 1.0)
             c_rst = m_claude["quotaInfo"].get("resetTime", "")
             
-        return g_rem, g_rst, c_rem, c_rst
+        models_list = extract_primary_models(models_data)
+        return g_rem, g_rst, c_rem, c_rst, models_list
 
 def parse_quota_summary(summary_data: dict):
     """
@@ -335,17 +514,19 @@ def fetch_grouped_quota(email: str, access_token: str, project_id: str = "aicode
     if not force_refresh and email in cache:
         c_entry = cache[email]
         if now - c_entry.get("timestamp", 0) < 180:
-            return c_entry.get("groups", [])
+            return c_entry.get("groups", []), c_entry.get("models", [])
 
     # 第一级：尝试 retrieveUserQuotaSummary 获取真正的 5H + Weekly 额度
     summary_groups = fetch_quota_summary(access_token, project_id)
     if summary_groups:
+        models_list = fetch_primary_models_probe(access_token, project_id, fallback_groups=summary_groups)
         cache[email] = {
             "timestamp": now,
-            "groups": summary_groups
+            "groups": summary_groups,
+            "models": models_list
         }
         save_quota_cache(cache)
-        return summary_groups
+        return summary_groups, models_list
 
     # 第二级：retrieveUserQuotaSummary 失败，自动回退到现有 fetchAvailableModels (5H 探测，Weekly 为 null)
     if ANTIGRAVITY_DEBUG:
@@ -353,19 +534,22 @@ def fetch_grouped_quota(email: str, access_token: str, project_id: str = "aicode
         
     best_g_rem, best_g_rst = None, ""
     best_c_rem, best_c_rst = None, ""
+    best_models = []
     
     probe_projects = [project_id] if project_id else ["aicode-consumers", ""]
     success = False
     
     for p in probe_projects:
         try:
-            g_rem, g_rst, c_rem, c_rst = fetch_single_probe(access_token, p)
+            g_rem, g_rst, c_rem, c_rst, m_list = fetch_single_probe(access_token, p)
             if g_rem is not None:
                 if best_g_rem is None or g_rem > best_g_rem:
                     best_g_rem, best_g_rst = g_rem, g_rst
             if c_rem is not None:
                 if best_c_rem is None or c_rem > best_c_rem:
                     best_c_rem, best_c_rst = c_rem, c_rst
+            if m_list:
+                best_models = m_list
             success = True
         except Exception as e:
             if ANTIGRAVITY_DEBUG:
@@ -374,7 +558,7 @@ def fetch_grouped_quota(email: str, access_token: str, project_id: str = "aicode
             
     # 第三级：两个接口均失败，若有缓存则返回最近一次成功数据
     if not success and email in cache:
-        return cache[email].get("groups", [])
+        return cache[email].get("groups", []), cache[email].get("models", [])
         
     g_final_pct = int(round(best_g_rem * 100)) if best_g_rem is not None else 0
     c_final_pct = int(round(best_c_rem * 100)) if best_c_rem is not None else 0
@@ -403,13 +587,16 @@ def fetch_grouped_quota(email: str, access_token: str, project_id: str = "aicode
             "weekly": None
         }
     ]
-    
+    if not best_models:
+        best_models = extract_primary_models({}, fallback_groups=groups)
+
     cache[email] = {
         "timestamp": now,
-        "groups": groups
+        "groups": groups,
+        "models": best_models
     }
     save_quota_cache(cache)
-    return groups
+    return groups, best_models
 
 # ==================== ChatGPT Plus / Codex 个人账号模块 ====================
 
@@ -784,6 +971,39 @@ def probe_chatgpt_quota(acc: dict, force_refresh: bool = False) -> dict:
 
             now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            # 整理 Codex / ChatGPT Plus 主要模型列表
+            codex_models = [
+                {
+                    "id": "codex-gpt-5",
+                    "name": "codex-gpt-5",
+                    "displayName": "GPT-5 / Codex",
+                    "provider": "OpenAI",
+                    "tier": "Codex",
+                    "tagLabel": "Codex 主力",
+                    "remainingPercent": fh_rem if fh_rem is not None else 100,
+                    "resetTime": fh_rst or "",
+                    "used": (fh_rem is not None and fh_rem < 100),
+                    "isPrimary": True
+                }
+            ]
+            for alm in add_limits:
+                alm_target = alm.get("weekly") or alm.get("five_hour")
+                alm_rem = alm_target.get("remaining_percent", 100) if alm_target else 100
+                alm_id = alm.get("id", "preview-model")
+                alm_name = alm.get("name", alm_id)
+                codex_models.append({
+                    "id": alm_id,
+                    "name": alm_id,
+                    "displayName": alm_name,
+                    "provider": "OpenAI",
+                    "tier": "Preview",
+                    "tagLabel": "专属模型",
+                    "remainingPercent": alm_rem,
+                    "resetTime": alm_target.get("reset_at", "") if alm_target else "",
+                    "used": (alm_rem < 100),
+                    "isPrimary": True
+                })
+
             result = {
                 "success": True,
                 "status": "active",
@@ -796,6 +1016,7 @@ def probe_chatgpt_quota(acc: dict, force_refresh: bool = False) -> dict:
                 "five_hour_reset": fh_rst,
                 "seven_day_remaining": wk_rem,
                 "seven_day_reset": wk_rst,
+                "models": codex_models,
                 "fetched_at": now_str,
                 "stale": False,
                 "updated_at": now_str
@@ -1203,12 +1424,13 @@ def get_quota(refresh: bool = False):
                 "projectId": acc.get("projectId", "aicode-consumers"),
                 "status": "error",
                 "error": str(e),
-                "groups": []
+                "groups": [],
+                "models": []
             })
             continue
             
         proj = acc.get("projectId") or "aicode-consumers"
-        groups = fetch_grouped_quota(email, tok, proj, force_refresh=refresh)
+        groups, models = fetch_grouped_quota(email, tok, proj, force_refresh=refresh)
         
         tier = "Google AI Pro"
         if proj == "aicode-consumers":
@@ -1219,7 +1441,8 @@ def get_quota(refresh: bool = False):
             "isActive": email == active_email,
             "projectId": proj,
             "tier": tier,
-            "groups": groups
+            "groups": groups,
+            "models": models
         })
         
     if changed:

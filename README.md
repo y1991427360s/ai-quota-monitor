@@ -16,6 +16,7 @@
     - 多账号切换与额度聚合。
     - **双窗口限额监控**：原生支持 **Five Hour Limit (5小时滚动额度)** 与 **Weekly Limit (7天周额度)** 实时消耗百分比与精确重置倒计时。
     - **双模型池独立划分**：分别追踪 Gemini Models (Gemini 3.8 Flash / 3.1 Pro) 及 Claude and GPT models (Claude Sonnet / Opus / GPT-OSS) 的共享配额。
+    - **精确后端路由模型标识与降级检测**：精选 6 款核心主力路由模型（gemini-3.8-flash-tiered、gemini-3.6-flash-high、gemini-3.1-pro-high、claude-sonnet-4-6、claude-opus-4-6-thinking、gpt-oss-120b-medium），未分配主力模型时自动识别 Low 降级模型并标红警示；默认聚焦展示已调用模型，未调用模型折叠收纳。
     - **高可用三级智能 Fallback 架构**：
       1. 首选 Antigravity 官方内部 `retrieveUserQuotaSummary` 接口直接获取服务端原生 5H + Weekly 聚合配额；
       2. 若接口不可用或账号未下发周配额，自动平滑回退至 `fetchAvailableModels` 保持 5 小时额度精准刷新；
