@@ -948,7 +948,7 @@
     <div class="model-filters" aria-label="模型筛选">
       <input id="modelSearch" type="search" placeholder="搜索模型名称、系列或原始 ID" aria-label="搜索模型" oninput="modelSearch=this.value;rerenderCards()">
       <select id="modelProvider" aria-label="按 Provider 筛选" onchange="modelProvider=this.value;rerenderCards()"><option value="">全部 Provider</option></select>
-      <span class="quota-meta">额度未提供与未使用分别展示，列表仅来自真实接口。</span>
+      
     </div>
     <!-- 容器内容 -->
     <div id="contentArea" aria-live="polite">
@@ -1087,7 +1087,7 @@
       return d ? d.toLocaleString('zh-CN', {hour12:false, timeZoneName:'short'}) : '未提供';
     }
     function provenance(item) {
-      return `<div class="quota-meta">${escapeHtml(statusText(item.status, item.stale))} · 获取：${escapeHtml(dateText(item.fetched_at || item.updated_at))}<br>来源：${escapeHtml(item.source || '未提供')}</div>`;
+      return item.stale || item.status === 'stale' ? '<div class="quota-meta">历史缓存 · stale</div>' : '';
     }
     function windowEntries(pool) {
       if (!pool || typeof pool !== 'object') return [];
@@ -1100,16 +1100,14 @@
     }
     function renderWindow(win, fallbackLabel = '') {
       const pct = percentValue(win.remaining_percent ?? win.percentage);
-      const kind = win.kind;
-      const label = kind === 'five_hour' ? 'Five Hour Limit（5 小时）' : kind === 'weekly' ? 'Weekly Limit（7 天）' : (win.name || win.id || fallbackLabel || '未知窗口');
-      const reset = win.reset_at ?? win.resetTime;
-      const countdown = formatCountdown(reset);
-      const state = win.stale ? 'stale' : (win.status || (pct === null ? 'unknown' : pct === 0 ? 'exhausted' : 'available'));
-      return `<div class="limit-row"><div class="quota-window-info"><div class="limit-label">${escapeHtml(label)}</div><div class="limit-sub">重置：${escapeHtml(dateText(reset))}${countdown ? ' · '+escapeHtml(countdown) : ''}</div><div class="limit-sub">${escapeHtml(statusText(state))}${win.window_seconds !== null && win.window_seconds !== undefined ? ' · 窗口 '+escapeHtml(win.window_seconds)+' 秒' : ''}</div>${win.source || win.fetched_at ? `<div class="limit-sub">${escapeHtml(win.source || '来源未提供')} · ${escapeHtml(dateText(win.fetched_at))}</div>` : ''}</div><span class="limit-pct" style="color:${getColor(pct)}">${pct === null ? '未知' : escapeHtml(pct)+'%'}</span></div>`;
+      const label = win.kind === 'five_hour' ? '5 小时额度' : win.kind === 'weekly' ? '每周额度' : (win.name || win.id || fallbackLabel || '额度');
+      const countdown = formatCountdown(win.reset_at ?? win.resetTime);
+      return `<div class="limit-row"><div class="quota-window-info"><div class="limit-label">${escapeHtml(label)}</div>${countdown ? `<div class="limit-sub">${escapeHtml(countdown)}${countdown.includes('等待') ? '' : '后重置'}</div>` : ''}${win.stale ? '<div class="limit-sub">历史缓存 · stale</div>' : ''}</div><span class="limit-pct" style="color:${getColor(pct)}">${pct === null ? '未知' : escapeHtml(pct)+'%'}</span></div>`;
     }
     function renderPool(pool, label, required = false) {
       const windows = windowEntries(pool);
-      return `<div class="group-section"><div class="group-title">${escapeHtml(label)}</div>${provenance(pool || {})}${windows.length ? windows.map(w => renderWindow({...w, stale: Boolean(pool?.stale || w.stale)})).join('') : '<div class="quota-meta">未提供窗口额度</div>'}${required && !windows.some(w => w.kind === 'five_hour') ? '<div class="quota-meta">5H：接口未提供</div>' : ''}${required && !windows.some(w => w.kind === 'weekly') ? '<div class="quota-meta">Weekly：接口未提供</div>' : ''}</div>`;
+      if (!required && !windows.length) return '';
+      return `<div class="group-section"><div class="group-title">${escapeHtml(label)}</div>${windows.length ? windows.map(w => renderWindow({...w, stale: Boolean(pool?.stale || w.stale)})).join('') : '<div class="quota-meta">暂时无法获取额度</div>'}</div>`;
     }
     function rerenderCards() {
       if (currentTab === 'google') renderGoogleCards(lastRenderedGoogleItems);
@@ -1134,7 +1132,7 @@
       const list = showAll ? filtered : filtered.slice(0, 6);
       return `<div class="models-section"><div class="models-header"><span class="models-title">实际返回模型 · ${filtered.length} / ${models.length}</span><button class="models-toggle-btn" data-action="models" data-key="${escapeHtml(cardKey)}" aria-expanded="${showAll}">${showAll ? '收起列表' : '展示全部模型'}</button></div><div class="models-list">${list.map(m => {
         const pct = percentValue(m.remainingPercent);
-        return `<div class="model-row"><div class="model-info-left"><span class="provider-tag">${escapeHtml(m.provider || '未知 Provider')}</span><span class="model-name">${escapeHtml(m.displayName || m.id)}</span>${m.tier ? `<span class="tier-badge">${escapeHtml(m.tier)}</span>` : ''}</div><span class="model-pct-pill" style="color:${getColor(pct)}">${pct === null ? '额度未提供' : escapeHtml(pct)+'%'}</span><div class="model-detail">${escapeHtml(statusText(m.status || (pct === null ? 'unknown' : pct === 0 ? 'exhausted' : 'available'),m.stale))}${m.quotaScope === 'group' || m.quota_scope === 'group' ? ' · 组共享额度' : ''}${m.thinkingLevel ? ' · Thinking '+escapeHtml(m.thinkingLevel) : ''}${m.family ? ' · '+escapeHtml(m.family) : ''}${m.version ? ' '+escapeHtml(m.version) : ''}<br>重置：${escapeHtml(dateText(m.resetTime))}${formatCountdown(m.resetTime) ? ' · '+escapeHtml(formatCountdown(m.resetTime)) : ''}<br>来源：${escapeHtml(m.source || '未提供')} · 获取：${escapeHtml(dateText(m.fetched_at))}<details><summary>展开原始 ID</summary><code>${escapeHtml(m.rawModelId || m.id)}</code></details>${Array.isArray(m.windows) && m.windows.length ? '<details><summary>查看全部额度窗口</summary>'+m.windows.map(w => renderWindow(w)).join('')+'</details>' : ''}</div></div>`;
+        return `<div class="model-row"><div class="model-info-left"><span class="provider-tag">${escapeHtml(m.provider || '未知 Provider')}</span><span class="model-name">${escapeHtml(m.displayName || m.id)}</span>${m.tier ? `<span class="tier-badge">${escapeHtml(m.tier)}</span>` : ''}</div><span class="model-pct-pill" style="color:${getColor(pct)}">${pct === null ? '额度未提供' : escapeHtml(pct)+'%'}</span><div class="model-detail">${escapeHtml(statusText(m.status || (pct === null ? 'unknown' : pct === 0 ? 'exhausted' : 'available'),m.stale))}${m.quotaScope === 'group' || m.quota_scope === 'group' ? ' · 组共享额度' : ''}${m.thinkingLevel ? ' · Thinking '+escapeHtml(m.thinkingLevel) : ''}${m.family ? ' · '+escapeHtml(m.family) : ''}${m.version ? ' '+escapeHtml(m.version) : ''}<br>重置：${escapeHtml(dateText(m.resetTime))}${formatCountdown(m.resetTime) ? ' · '+escapeHtml(formatCountdown(m.resetTime)) : ''}<details><summary>展开原始 ID</summary><code>${escapeHtml(m.rawModelId || m.id)}</code></details>${Array.isArray(m.windows) && m.windows.length ? '<details><summary>查看全部额度窗口</summary>'+m.windows.map(w => renderWindow(w)).join('')+'</details>' : ''}</div></div>`;
       }).join('') || '<div class="quota-meta">没有符合筛选条件的模型。</div>'}${!showAll && filtered.length > 6 ? `<div class="quota-meta">另有 ${filtered.length-6} 个模型，点击“展示全部模型”查看。</div>` : ''}</div></div>`;
     }
     function cardHeader(item, isGoogle) {
@@ -1165,6 +1163,8 @@
       document.getElementById("tabGoogleBtn").classList.toggle("active", tab === "google");
       document.getElementById("addChatgptBtn").style.display = (tab === "codex") ? "inline-flex" : "none";
       document.getElementById("addGoogleBtn").style.display = (tab === "google") ? "inline-flex" : "none";
+      document.querySelector('.model-filters').style.display = tab === 'google' ? 'flex' : 'none';
+      document.getElementById('globalModelFilterBtn').style.display = tab === 'google' ? 'inline-flex' : 'none';
       fetchActiveTab();
     }
 
@@ -1231,16 +1231,13 @@
       if (!lastRenderedChatgptItems.length) { renderChatgptEmptyState(); return; }
       document.getElementById('contentArea').innerHTML = '<div class="account-grid">'+lastRenderedChatgptItems.map((item,index) => {
         const credits = item.credits;
-        let creditHtml = '';
-        if (credits) {
-          const balance = credits.balance;
-          const numeric = balance !== null && balance !== undefined && balance !== '' && typeof balance !== 'boolean' && Number.isFinite(Number(balance));
-          const text = credits.unlimited === true ? '无上限' : numeric ? String(balance) : '目前无法获取';
-          creditHtml = `<div class="group-section"><div class="group-title">Codex Credits</div><div>${escapeHtml(text)}</div>${provenance(credits)}</div>`;
-        }
+        const balance = credits?.balance;
+        const numeric = balance !== null && balance !== undefined && balance !== '' && typeof balance !== 'boolean' && Number.isFinite(Number(balance));
+        const creditHtml = credits && (credits.unlimited === true || numeric) ? `<div class="quota-meta">Credits：${escapeHtml(credits.unlimited === true ? '无上限' : balance)}${credits.stale ? ' · 历史缓存' : ''}</div>` : '';
         const web = item.chatgpt_web_quota || {};
         const webWindows = windowEntries(web);
-        return `<article class="account-card ${item.isActive ? 'active-account' : ''}">${cardHeader(item,false)}${renderPool(item.rate_limits || {},'Codex 共享额度 · 单模型额度未提供',true)}${(item.additional_rate_limits || []).map(pool => renderPool(pool,pool.name || pool.model_id || pool.id || '专属额度池')).join('')}${creditHtml}<div class="group-section"><div class="group-title">ChatGPT 网页独立额度</div>${web.status === 'available' && webWindows.length ? webWindows.map(w => renderWindow(w)).join('') : `<div class="quota-meta">目前无法获取：${escapeHtml(web.reason || '当前授权未提供可靠的网页端独立额度数据。Codex 共享额度不代表网页模型对话额度。')}</div>`}</div>${item.models && item.models.length ? renderModelsSection(item.models,'codex-'+index) : ''}${cardFooter(item,index,'codex')}</article>`;
+        const webHtml = web.status === 'available' && webWindows.length ? renderPool(web, 'ChatGPT 网页额度') : '';
+        return `<article class="account-card ${item.isActive ? 'active-account' : ''}">${cardHeader(item,false)}${renderPool(item.rate_limits || {},'Codex 共享额度',true)}${(item.additional_rate_limits || []).map(pool => renderPool(pool,pool.name || pool.model_id || pool.id || '专属额度池')).join('')}${creditHtml}${webHtml}${cardFooter(item,index,'codex')}</article>`;
       }).join('')+'</div>';
       updateGlobalFilterUI(); bindCardActions();
     }

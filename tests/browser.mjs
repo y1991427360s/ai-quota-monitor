@@ -53,12 +53,14 @@ try {
   async function screenshot(name){await page.screenshot({path:path.join(output,name+'.png'),fullPage:true});report.screenshots.push(name+'.png');console.log('截图完成：'+name);}
   async function noOverflow(){assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);}
   await page.goto(`http://127.0.0.1:${server.address().port}/quota/`);
-  await page.getByText('Codex 共享额度 · 单模型额度未提供').waitFor();
+  await page.getByText('Codex 共享额度', {exact:true}).waitFor();
   assert.match(await page.locator('#contentArea').innerText(),/75.5%/);
   assert.match(await page.locator('#contentArea').innerText(),/0%/);
-  assert.match(await page.locator('#contentArea').innerText(),/目前无法获取/);
+  assert.doesNotMatch(await page.locator('#contentArea').innerText(),/窗口 18000|来源：|获取：|GMT|网页独立额度|目前无法获取/);
+  assert.equal(await page.locator('.model-filters').isVisible(),false);
+  assert.ok(await page.locator('.account-card').first().evaluate(el=>el.getBoundingClientRect().height) < 600);
   await screenshot('chatgpt');
-  report.checks.push('Codex 5H/Weekly、专属未知池、Credits、网页额度不可用');
+  report.checks.push('Codex 5H/Weekly、专属未知池、Credits行、隐藏无数据区与技术说明');
   await page.locator('#tabGoogleBtn').click();
   await page.getByText('Gemini 共享额度组').waitFor();
   await screenshot('google');
