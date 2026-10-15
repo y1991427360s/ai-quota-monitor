@@ -212,7 +212,10 @@ def extract_primary_models(models_data, fallback_groups=None):
     # Preferences affect ordering only; never create a model or discard unknown IDs.
     preferences = {}
     try:
-        preferences = json.loads((Path(__file__).resolve().parent.parent / "config" / "model_preferences.json").read_text(encoding="utf-8"))
+        module_dir = Path(__file__).resolve().parent
+        local_config = module_dir / "config" / "model_preferences.json"
+        config_path = local_config if local_config.is_file() else module_dir.parent / "config" / "model_preferences.json"
+        preferences = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         pass
     priority = preferences.get("recommended_model_ids", [])

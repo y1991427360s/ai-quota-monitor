@@ -272,3 +272,15 @@ def test_name_aliases_do_not_create_models_or_override_upstream():
     names = {entry["id"]: entry["displayName"] for entry in result}
     assert names == {"gpt-6.1-sol": "GPT-6.1 Sol", "gpt-6-astra": "Actual upstream name",
                      "gpt-future-99": "gpt-future-99"}
+
+
+def test_flat_legacy_deployment_loads_own_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(qp, "__file__", str(tmp_path / "quota_parsing.py"))
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "model_preferences.json").write_text(json.dumps({
+        "recommended_model_ids": ["future-model-b"],
+        "display_names": {"future-model-b": "真实记录的配置名称"}}), encoding="utf-8")
+    result = qp.extract_primary_models({"future-model-a": {}, "future-model-b": {}})
+    assert result[0]["id"] == "future-model-b"
+    assert result[0]["displayName"] == "真实记录的配置名称"
