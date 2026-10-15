@@ -874,6 +874,21 @@
       background: rgba(100, 116, 139, 0.15);
       color: var(--text);
     }
+    .quota-meta {font-size:11px;color:var(--text-muted);line-height:1.7;margin:4px 0;overflow-wrap:anywhere;}
+    .quota-notice {font-size:12px;color:var(--warning);padding:10px 0;overflow-wrap:anywhere;}
+    .quota-window-info {min-width:0;overflow-wrap:anywhere;}
+    .limit-pct {white-space:nowrap;}
+    .model-filters {display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:18px;}
+    .model-filters input,.model-filters select {background:var(--input-bg);color:var(--input-text);border:1px solid var(--input-border);border-radius:8px;padding:9px;max-width:100%;}
+    .model-filters input {flex:1;min-width:160px;}
+    .model-row {flex-wrap:wrap;gap:8px;}
+    .model-info-left {min-width:0;flex:1;flex-wrap:wrap;}
+    .model-name,.model-detail code {overflow-wrap:anywhere;word-break:break-word;}
+    .model-detail {flex-basis:100%;font-size:11px;color:var(--text-muted);line-height:1.7;overflow-wrap:anywhere;}
+    .model-detail summary {cursor:pointer;color:var(--primary);}
+    .account-card {min-width:0;}
+    @media(max-width:600px) {.account-grid {grid-template-columns:minmax(0,1fr);} header,.header-left {flex-wrap:wrap;gap:12px;} .header-actions {flex-wrap:wrap;} .tabs-bar {max-width:100%;}.tab-btn {padding:8px 10px;}}
+    @media(prefers-reduced-motion:reduce) {* {transition:none!important;animation:none!important;}}
   </style>
 </head>
 <body>
@@ -924,14 +939,19 @@
       </div>
 
       <!-- 全局模型过滤开关按钮 -->
-      <button class="btn btn-secondary" id="globalModelFilterBtn" onclick="toggleGlobalHideUnused()" title="点击切换隐藏/显示未使用的主要模型">
+      <button class="btn btn-secondary" id="globalModelFilterBtn" onclick="toggleGlobalHideUnused()" title="只筛选接口明确提供额度数据的模型">
         <span id="globalModelFilterIcon">👁</span>
-        <span id="globalModelFilterText">隐藏未用模型 (已开启)</span>
+        <span id="globalModelFilterText">只看有额度数据：关</span>
       </button>
     </div>
 
+    <div class="model-filters" aria-label="模型筛选">
+      <input id="modelSearch" type="search" placeholder="搜索模型名称、系列或原始 ID" aria-label="搜索模型" oninput="modelSearch=this.value;rerenderCards()">
+      <select id="modelProvider" aria-label="按 Provider 筛选" onchange="modelProvider=this.value;rerenderCards()"><option value="">全部 Provider</option></select>
+      <span class="quota-meta">额度未提供与未使用分别展示，列表仅来自真实接口。</span>
+    </div>
     <!-- 容器内容 -->
-    <div id="contentArea">
+    <div id="contentArea" aria-live="polite">
       <div class="loading-state">正在拉取配额数据...</div>
     </div>
   </div>
@@ -1029,148 +1049,115 @@
     let chatgptAuthUrl = "";
     let chatgptAuthState = "";
 
-    // 模型过滤与展示状态
-    let globalHideUnused = localStorage.getItem('sen_quota_hide_unused') !== 'false'; // 默认开启隐藏未用
-    let cardExpandedMap = {}; // 记录单个卡片的主动展开覆盖状态
+    // 只显示接口返回的模型；未知额度和“未使用”没有等价关系。
+    let globalQuotaOnly = false;
+    let modelSearch = '';
+    let modelProvider = '';
+    let cardExpandedMap = {};
     let lastRenderedGoogleItems = [];
     let lastRenderedChatgptItems = [];
 
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function percentValue(value) {
+      if (value === null || value === undefined || (typeof value === 'string' && !value.trim()) || typeof value === 'boolean') return null;
+      const n = Number(value);
+      return Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
+    }
+    function filterModels(models, query = '', provider = '', quotaOnly = false) {
+      const needle = String(query).trim().toLowerCase();
+      return (Array.isArray(models) ? models : []).filter(m => {
+        const haystack = [m.id,m.rawModelId,m.displayName,m.provider,m.family,m.version,m.tier,m.thinkingLevel].join(' ').toLowerCase();
+        return (!needle || haystack.includes(needle)) && (!provider || m.provider === provider) && (!quotaOnly || percentValue(m.remainingPercent) !== null || (m.windows || []).some(w => percentValue(w.percentage ?? w.remaining_percent) !== null));
+      });
+    }
+    function statusText(status, stale = false) {
+      if (stale || status === 'stale') return '历史缓存 · stale';
+      return ({available:'有效额度',exhausted:'额度耗尽',unavailable:'无法获取',unknown:'状态未知',error:'获取失败',limited:'请求受限（窗口未确认）'})[status] || '状态未知';
+    }
+    function dateValue(value) {
+      if (value === null || value === undefined || value === '') return null;
+      const numeric = typeof value === 'number' || /^\d+(\.\d+)?$/.test(String(value));
+      const d = new Date(numeric ? Number(value) * (Number(value) > 1e11 ? 1 : 1000) : value);
+      return Number.isFinite(d.getTime()) ? d : null;
+    }
+    function dateText(value) {
+      const d = dateValue(value);
+      return d ? d.toLocaleString('zh-CN', {hour12:false, timeZoneName:'short'}) : '未提供';
+    }
+    function provenance(item) {
+      return `<div class="quota-meta">${escapeHtml(statusText(item.status, item.stale))} · 获取：${escapeHtml(dateText(item.fetched_at || item.updated_at))}<br>来源：${escapeHtml(item.source || '未提供')}</div>`;
+    }
+    function windowEntries(pool) {
+      if (!pool || typeof pool !== 'object') return [];
+      if (Array.isArray(pool.windows) && pool.windows.length) return pool.windows;
+      const entries = [];
+      if (pool.five_hour || pool.fiveHour) entries.push({...pool.five_hour || pool.fiveHour, kind:'five_hour'});
+      if (pool.weekly) entries.push({...pool.weekly, kind:'weekly'});
+      if (Array.isArray(pool.unknown_windows)) entries.push(...pool.unknown_windows);
+      return entries;
+    }
+    function renderWindow(win, fallbackLabel = '') {
+      const pct = percentValue(win.remaining_percent ?? win.percentage);
+      const kind = win.kind;
+      const label = kind === 'five_hour' ? 'Five Hour Limit（5 小时）' : kind === 'weekly' ? 'Weekly Limit（7 天）' : (win.name || win.id || fallbackLabel || '未知窗口');
+      const reset = win.reset_at ?? win.resetTime;
+      const countdown = formatCountdown(reset);
+      const state = win.stale ? 'stale' : (win.status || (pct === null ? 'unknown' : pct === 0 ? 'exhausted' : 'available'));
+      return `<div class="limit-row"><div class="quota-window-info"><div class="limit-label">${escapeHtml(label)}</div><div class="limit-sub">重置：${escapeHtml(dateText(reset))}${countdown ? ' · '+escapeHtml(countdown) : ''}</div><div class="limit-sub">${escapeHtml(statusText(state))}${win.window_seconds !== null && win.window_seconds !== undefined ? ' · 窗口 '+escapeHtml(win.window_seconds)+' 秒' : ''}</div>${win.source || win.fetched_at ? `<div class="limit-sub">${escapeHtml(win.source || '来源未提供')} · ${escapeHtml(dateText(win.fetched_at))}</div>` : ''}</div><span class="limit-pct" style="color:${getColor(pct)}">${pct === null ? '未知' : escapeHtml(pct)+'%'}</span></div>`;
+    }
+    function renderPool(pool, label, required = false) {
+      const windows = windowEntries(pool);
+      return `<div class="group-section"><div class="group-title">${escapeHtml(label)}</div>${provenance(pool || {})}${windows.length ? windows.map(w => renderWindow({...w, stale: Boolean(pool?.stale || w.stale)})).join('') : '<div class="quota-meta">未提供窗口额度</div>'}${required && !windows.some(w => w.kind === 'five_hour') ? '<div class="quota-meta">5H：接口未提供</div>' : ''}${required && !windows.some(w => w.kind === 'weekly') ? '<div class="quota-meta">Weekly：接口未提供</div>' : ''}</div>`;
+    }
+    function rerenderCards() {
+      if (currentTab === 'google') renderGoogleCards(lastRenderedGoogleItems);
+      else renderChatgptCards(lastRenderedChatgptItems);
+    }
     function updateGlobalFilterUI() {
-      const btn = document.getElementById("globalModelFilterBtn");
-      const icon = document.getElementById("globalModelFilterIcon");
-      const text = document.getElementById("globalModelFilterText");
-      if (!btn) return;
-      if (globalHideUnused) {
-        icon.textContent = "👁";
-        text.textContent = "隐藏未用模型 (已开启)";
-        btn.classList.add("btn-secondary");
-      } else {
-        icon.textContent = "👁‍🗨";
-        text.textContent = "显示全部模型 (未隐藏)";
-        btn.classList.remove("btn-secondary");
+      document.getElementById('globalModelFilterText').textContent = globalQuotaOnly ? '只看有额度数据：开' : '只看有额度数据：关';
+      const activeItems = currentTab === 'google' ? lastRenderedGoogleItems : lastRenderedChatgptItems;
+      const providers = [...new Set(activeItems.flatMap(i => i.models || []).map(m => m.provider).filter(Boolean))].sort();
+      const select = document.getElementById('modelProvider');
+      if (select) {
+        select.innerHTML = '<option value="">全部 Provider</option>' + providers.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+        select.value = modelProvider;
       }
     }
-
-    function toggleGlobalHideUnused() {
-      globalHideUnused = !globalHideUnused;
-      localStorage.setItem('sen_quota_hide_unused', globalHideUnused ? 'true' : 'false');
-      cardExpandedMap = {};
-      updateGlobalFilterUI();
-      if (currentTab === "google" && lastRenderedGoogleItems.length > 0) {
-        renderGoogleCards(lastRenderedGoogleItems);
-      } else if (currentTab === "codex" && lastRenderedChatgptItems.length > 0) {
-        renderChatgptCards(lastRenderedChatgptItems);
-      }
-    }
-
-    function toggleCardModels(cardKey, forceShow = false) {
-      const currentlyShowingAll = cardExpandedMap[cardKey] !== undefined ? cardExpandedMap[cardKey] : !globalHideUnused;
-      cardExpandedMap[cardKey] = forceShow ? true : !currentlyShowingAll;
-      if (currentTab === "google" && lastRenderedGoogleItems.length > 0) {
-        renderGoogleCards(lastRenderedGoogleItems);
-      } else if (currentTab === "codex" && lastRenderedChatgptItems.length > 0) {
-        renderChatgptCards(lastRenderedChatgptItems);
-      }
-    }
-
+    function toggleGlobalHideUnused() { globalQuotaOnly = !globalQuotaOnly; cardExpandedMap = {}; rerenderCards(); }
+    function toggleCardModels(cardKey) { cardExpandedMap[cardKey] = !cardExpandedMap[cardKey]; rerenderCards(); }
     function renderModelsSection(models, cardKey) {
-      if (!models || models.length === 0) return '';
-
-      const usedModels = models.filter(m => m.used);
-      const usedCount = usedModels.length;
-      const totalCount = models.length;
-
-      const isCardOverridden = cardExpandedMap[cardKey];
-      const showAll = isCardOverridden !== undefined ? isCardOverridden : !globalHideUnused;
-      const displayList = showAll ? models : usedModels;
-
-      let listHtml = '';
-      if (!showAll && usedCount === 0) {
-        listHtml = `
-          <div class="all-idle-notice" onclick="toggleCardModels('${cardKey}', true)" title="点击展开查看全部后端路由模型">
-            <span>⚡ 全部 ${totalCount} 款后端路由模型均 100% 满额待命</span>
-            <span style="color: var(--primary); font-weight: 600;">展开 ▾</span>
-          </div>
-        `;
-      } else {
-        for (const m of displayList) {
-          const pct = m.remainingPercent !== undefined ? m.remainingPercent : 100;
-          const color = getColor(pct);
-          const isUsed = Boolean(m.used);
-          const countdown = m.resetTime ? formatCountdown(m.resetTime) : '';
-          const modelIdStr = m.id || m.name || '';
-          const tooltip = m.displayName && m.displayName !== modelIdStr 
-            ? `${m.displayName} (${modelIdStr})${countdown ? ' · 倒计时: ' + countdown : ''}` 
-            : `${modelIdStr}${countdown ? ' · 倒计时: ' + countdown : ''}`;
-
-          let providerClass = 'provider-google';
-          if (m.provider === 'Anthropic') providerClass = 'provider-anthropic';
-          else if (m.provider === 'OpenAI') providerClass = 'provider-openai';
-
-          let tierClass = '';
-          const tierLower = (m.tier || '').toLowerCase();
-          if (tierLower === 'tiered') tierClass = 'tier-tiered';
-          else if (tierLower === 'high') tierClass = 'tier-high';
-          else if (tierLower === 'low') tierClass = 'tier-low';
-          else if (tierLower === 'thinking') tierClass = 'tier-thinking';
-          else if (tierLower === 'agent') tierClass = 'tier-agent';
-          else if (tierLower === 'codex') tierClass = 'tier-codex';
-          else if (tierLower === 'medium') tierClass = 'tier-medium';
-          else if (tierLower === 'preview') tierClass = 'tier-preview';
-
-          const tierBadgeHtml = (m.tagLabel || m.tier) ? `<span class="tier-badge ${tierClass}">${m.tagLabel || m.tier}</span>` : '';
-
-          listHtml += `
-            <div class="model-row ${isUsed ? 'is-used' : 'is-idle'}" title="${tooltip}">
-              <div class="model-info-left">
-                <span class="provider-tag ${providerClass}">${m.provider || 'AI'}</span>
-                <code class="model-id-code">${modelIdStr}</code>
-                ${tierBadgeHtml}
-              </div>
-              <div class="model-info-right">
-                ${isUsed ? `
-                  <span class="model-pct-pill" style="color: ${color}; background: rgba(0,0,0,0.06);">${pct}%</span>
-                ` : `
-                  <span class="model-pct-pill" style="color: var(--text-muted); background: rgba(100,116,139,0.1);">100%</span>
-                `}
-              </div>
-            </div>
-          `;
-        }
-
-        if (!showAll && usedCount < totalCount) {
-          const idleCount = totalCount - usedCount;
-          listHtml += `
-            <div class="all-idle-notice" style="margin-top: 4px; padding: 4px 8px;" onclick="toggleCardModels('${cardKey}', true)" title="点击展开查看所有模型">
-              <span>⚡ 另有 ${idleCount} 款模型 100% 待命</span>
-              <span style="color: var(--primary); font-weight: 600;">展开 ▾</span>
-            </div>
-          `;
-        }
-      }
-
-      const toggleBtnText = showAll ? '仅看已用' : `展开全部 (${totalCount})`;
-
-      return `
-        <div class="models-section">
-          <div class="models-header">
-            <div class="models-title">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 3.36 2.06 6.24 5 7.42V20a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2.58c2.94-1.18 5-4.06 5-7.42a8 8 0 0 0-8-8z"/><path d="M9 13h6"/><path d="M10 17h4"/></svg>
-              <span>后端路由模型</span>
-              <span class="models-badge ${usedCount > 0 ? 'badge-used' : 'badge-idle'}">
-                ${usedCount > 0 ? `已调用 ${usedCount} 款` : '全部待命'}
-              </span>
-            </div>
-            <button class="models-toggle-btn" onclick="toggleCardModels('${cardKey}')" title="切换显示/隐藏未使用的模型">
-              ${toggleBtnText}
-            </button>
-          </div>
-          <div class="models-list">
-            ${listHtml}
-          </div>
-        </div>
-      `;
+      if (!Array.isArray(models) || !models.length) return '<div class="quota-meta">接口未提供实际模型列表；不会根据组额度构造模型。</div>';
+      const filtered = filterModels(models, modelSearch, modelProvider, globalQuotaOnly);
+      const showAll = Boolean(cardExpandedMap[cardKey]);
+      const list = showAll ? filtered : filtered.slice(0, 6);
+      return `<div class="models-section"><div class="models-header"><span class="models-title">实际返回模型 · ${filtered.length} / ${models.length}</span><button class="models-toggle-btn" data-action="models" data-key="${escapeHtml(cardKey)}" aria-expanded="${showAll}">${showAll ? '收起列表' : '展示全部模型'}</button></div><div class="models-list">${list.map(m => {
+        const pct = percentValue(m.remainingPercent);
+        return `<div class="model-row"><div class="model-info-left"><span class="provider-tag">${escapeHtml(m.provider || '未知 Provider')}</span><span class="model-name">${escapeHtml(m.displayName || m.id)}</span>${m.tier ? `<span class="tier-badge">${escapeHtml(m.tier)}</span>` : ''}</div><span class="model-pct-pill" style="color:${getColor(pct)}">${pct === null ? '额度未提供' : escapeHtml(pct)+'%'}</span><div class="model-detail">${escapeHtml(statusText(m.status || (pct === null ? 'unknown' : pct === 0 ? 'exhausted' : 'available'),m.stale))}${m.quotaScope === 'group' || m.quota_scope === 'group' ? ' · 组共享额度' : ''}${m.thinkingLevel ? ' · Thinking '+escapeHtml(m.thinkingLevel) : ''}${m.family ? ' · '+escapeHtml(m.family) : ''}${m.version ? ' '+escapeHtml(m.version) : ''}<br>重置：${escapeHtml(dateText(m.resetTime))}${formatCountdown(m.resetTime) ? ' · '+escapeHtml(formatCountdown(m.resetTime)) : ''}<br>来源：${escapeHtml(m.source || '未提供')} · 获取：${escapeHtml(dateText(m.fetched_at))}<details><summary>展开原始 ID</summary><code>${escapeHtml(m.rawModelId || m.id)}</code></details>${Array.isArray(m.windows) && m.windows.length ? '<details><summary>查看全部额度窗口</summary>'+m.windows.map(w => renderWindow(w)).join('')+'</details>' : ''}</div></div>`;
+      }).join('') || '<div class="quota-meta">没有符合筛选条件的模型。</div>'}${!showAll && filtered.length > 6 ? `<div class="quota-meta">另有 ${filtered.length-6} 个模型，点击“展示全部模型”查看。</div>` : ''}</div></div>`;
     }
+    function cardHeader(item, isGoogle) {
+      return `<div class="card-header"><div><div class="account-email">${escapeHtml(item.email || '未命名账号')}</div><div class="quota-meta">${escapeHtml(isGoogle ? item.tier || '套餐未提供' : item.plan || '套餐未提供')}</div></div><span class="badge ${item.isActive ? 'badge-active' : ''}">${item.isActive ? '活跃账号' : '待命'}</span></div>${provenance(item)}${item.error ? `<div class="quota-notice">${escapeHtml(item.error)}</div>` : ''}`;
+    }
+    function cardFooter(item, index, provider) {
+      return `<div class="card-footer">${!item.isActive ? `<button class="btn-switch" data-action="switch" data-provider="${provider}" data-index="${index}">设为主力</button>` : '<span class="quota-meta">当前主力</span>'}<button class="btn-card" data-action="delete" data-provider="${provider}" data-index="${index}">移除账号</button></div>`;
+    }
+    function bindCardActions() {
+      const area = document.getElementById('contentArea');
+      area.onclick = event => {
+        const btn = event.target.closest('[data-action]');
+        if (!btn || !area.contains(btn)) return;
+        if (btn.dataset.action === 'models') return toggleCardModels(btn.dataset.key);
+        const google = btn.dataset.provider === 'google';
+        const items = google ? lastRenderedGoogleItems : lastRenderedChatgptItems;
+        const item = items[Number(btn.dataset.index)];
+        if (!item) return;
+        if (btn.dataset.action === 'switch') (google ? switchAccount : switchChatgptAccount)(item.email);
+        if (btn.dataset.action === 'delete') (google ? deleteAccount : deleteChatgptAccount)(item.email);
+      };
+    }
+    window.QuotaUI = {escapeHtml, percentValue, filterModels, windowEntries, statusText, dateValue, renderModelsSection, renderWindow};
 
     function switchTab(tab) {
       currentTab = tab;
@@ -1210,14 +1197,16 @@
       area.innerHTML = '<div class="loading-state">正在查询 ChatGPT Plus 账号额度与滑窗状态...</div>';
       try {
         const res = await fetch(`/quota/api/chatgpt/quota?refresh=${forceRefresh ? 'true' : 'false'}`);
+        if (!res.ok) throw new Error(`额度接口返回 HTTP ${res.status}`);
         const data = await res.json();
+        if (currentTab !== "codex") return;
         if (Array.isArray(data) && data.length > 0) {
           renderChatgptCards(data);
         } else {
           renderChatgptEmptyState();
         }
       } catch (e) {
-        area.innerHTML = `<div class="empty-state" style="color: var(--danger);">加载 ChatGPT Plus 数据失败：${e.message}</div>`;
+        area.innerHTML = `<div class="empty-state" style="color: var(--danger);">加载 ChatGPT Plus 数据失败：${escapeHtml(e.message)}</div>`;
       }
     }
 
@@ -1238,198 +1227,22 @@
     }
 
     function renderChatgptCards(items) {
-      lastRenderedChatgptItems = items || [];
-      const area = document.getElementById("contentArea");
-      let html = '<div class="account-grid">';
-
-      for (const item of items) {
-        const email = item.email || "未命名账号";
-        const isActive = Boolean(item.isActive);
-        const isError = item.status === "error";
-        const isUnavailable = item.status === "unavailable";
-        const isLimited = item.status === "limited";
-        const isStale = Boolean(item.stale);
-        const fetchedAt = item.fetched_at || item.updated_at || "";
-
-        html += `
-          <div class="account-card ${isActive ? 'active-account' : ''}">
-            <div class="card-header">
-              <div>
-                <div class="account-email">${email}</div>
-                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
-                  ChatGPT ${(item.plan || 'Plus').toUpperCase()} · 个人会员
-                  ${fetchedAt ? `<span style="margin-left: 6px; opacity: 0.8;">更新: ${fetchedAt.split(' ')[1] || fetchedAt}</span>` : ''}
-                </div>
-              </div>
-              <span class="badge ${isLimited ? 'badge-danger' : (isActive ? 'badge-active' : 'badge-normal')}">
-                ${isLimited ? '已触限 429' : (isActive ? '活跃账号' : '待命')}
-              </span>
-            </div>
-        `;
-
-        if (isError) {
-          html += `
-            <div style="padding: 12px; background: rgba(239, 68, 68, 0.1); border-radius: 8px; color: var(--danger); font-size: 12px; margin: 10px 0;">
-              ${item.error || 'Token 可能已失效，请重新授权'}
-            </div>
-          `;
-        } else if (isUnavailable) {
-          html += `
-            <div style="padding: 12px; background: rgba(245, 158, 11, 0.1); border-radius: 8px; color: var(--warning); font-size: 12px; margin: 10px 0;">
-              ${item.error || '当前无法获取 Codex 实时额度'}
-            </div>
-          `;
-        } else {
-          if (isStale) {
-            html += `
-              <div style="padding: 6px 10px; background: rgba(245, 158, 11, 0.12); border-radius: 6px; color: var(--warning); font-size: 11px; margin-bottom: 8px;">
-                ⚠ 当前展示历史快照缓存 (${item.error || '接口请求中'})
-              </div>
-            `;
-          }
-
-          // 1. 主 Codex 共享额度
-          const rl = item.rate_limits || {};
-          const fh = rl.five_hour || (item.five_hour_remaining !== undefined && item.five_hour_remaining !== null ? {
-            remaining_percent: item.five_hour_remaining,
-            reset_at: item.five_hour_reset
-          } : null);
-
-          const wk = rl.weekly || (item.seven_day_remaining !== undefined && item.seven_day_remaining !== null ? {
-            remaining_percent: item.seven_day_remaining,
-            reset_at: item.seven_day_reset
-          } : null);
-
-          html += `
-            <div class="group-section">
-              <div class="group-title">
-                <span>Codex 共享额度</span>
-              </div>
-          `;
-
-          let hasSharedWindow = false;
-
-          // 5小时窗口行
-          if (fh && fh.remaining_percent !== undefined && fh.remaining_percent !== null) {
-            hasSharedWindow = true;
-            const pct = fh.remaining_percent;
-            const color = getColor(pct);
-            const countdown = formatCountdown(fh.reset_at);
-            html += `
-              <div class="limit-row">
-                <div>
-                  <div class="limit-label">Five Hour Limit Remaining</div>
-                  <div class="limit-sub">5小时窗口重置: ${countdown ? countdown : '已就绪'}</div>
-                </div>
-                <div class="limit-value-box">
-                  <span class="limit-pct" style="color: ${color};">${pct}%</span>
-                  <div class="ring-indicator" style="border-color: ${color};"></div>
-                </div>
-              </div>
-            `;
-          }
-
-          // 7天周额度行
-          if (wk && wk.remaining_percent !== undefined && wk.remaining_percent !== null) {
-            if (hasSharedWindow) {
-              html += `<div style="border-top: 1px solid rgba(255, 255, 255, 0.05); margin: 8px 0; padding-top: 8px;"></div>`;
-            }
-            hasSharedWindow = true;
-            const pct7d = wk.remaining_percent;
-            const col7d = getColor(pct7d);
-            const cd7d = formatCountdown(wk.reset_at);
-            html += `
-              <div class="limit-row">
-                <div>
-                  <div class="limit-label">Weekly Limit Remaining</div>
-                  <div class="limit-sub">周窗口重置: ${cd7d ? cd7d : '已就绪'}</div>
-                </div>
-                <div class="limit-value-box">
-                  <span class="limit-pct" style="color: ${col7d};">${pct7d}%</span>
-                  <div class="ring-indicator" style="border-color: ${col7d};"></div>
-                </div>
-              </div>
-            `;
-          } else {
-            if (hasSharedWindow) {
-              html += `<div style="border-top: 1px solid rgba(255, 255, 255, 0.05); margin: 8px 0; padding-top: 8px;"></div>`;
-            }
-            html += `
-              <div class="limit-row">
-                <div>
-                  <div class="limit-label">Weekly Limit Remaining</div>
-                  <div class="limit-sub">周窗口: 当前账号未返回 7 天额度</div>
-                </div>
-                <div class="limit-value-box">
-                  <span class="limit-pct" style="color: var(--text-muted); font-size: 13px;">未提供</span>
-                </div>
-              </div>
-            `;
-          }
-
-          html += `</div>`;
-
-          // 2. additional_rate_limits (若存在特定模型额度池)
-          const addLimits = item.additional_rate_limits || [];
-          if (addLimits.length > 0) {
-            html += `
-              <div class="group-section" style="margin-top: 8px;">
-                <div class="group-title">
-                  <span>额外额度</span>
-                </div>
-            `;
-            for (const alm of addLimits) {
-              const almName = alm.name || alm.id || "模型专属";
-              const almWk = alm.weekly;
-              const almFh = alm.five_hour;
-              const targetWin = almWk || almFh;
-              if (targetWin && targetWin.remaining_percent !== undefined) {
-                const remPct = targetWin.remaining_percent;
-                const rColor = getColor(remPct);
-                const rCd = formatCountdown(targetWin.reset_at);
-                html += `
-                  <div class="limit-row">
-                    <div>
-                      <div class="limit-label">${almName}</div>
-                      <div class="limit-sub">重置: ${rCd ? rCd : '已就绪'}</div>
-                    </div>
-                    <div class="limit-value-box">
-                      <span class="limit-pct" style="color: ${rColor};">${remPct}%</span>
-                      <div class="ring-indicator" style="border-color: ${rColor};"></div>
-                    </div>
-                  </div>
-                `;
-              }
-            }
-            html += `</div>`;
-          }
-
-          // 3. Credits 紧凑展示
-          if (item.credits && item.credits.has_credits) {
-            const cr = item.credits;
-            const crText = cr.unlimited ? 'Unlimited' : (cr.balance !== undefined ? cr.balance : '可用');
-            html += `
-              <div style="font-size: 11px; color: var(--text-muted); margin: 6px 2px 0 2px; display: flex; justify-content: space-between;">
-                <span>Codex Credits</span>
-                <span style="font-family: monospace; color: var(--text);">${crText}</span>
-              </div>
-            `;
-          }
-          // 4. 主要模型用量监控面板
-          html += renderModelsSection(item.models, 'c_' + email);
+      lastRenderedChatgptItems = Array.isArray(items) ? items : [];
+      if (!lastRenderedChatgptItems.length) { renderChatgptEmptyState(); return; }
+      document.getElementById('contentArea').innerHTML = '<div class="account-grid">'+lastRenderedChatgptItems.map((item,index) => {
+        const credits = item.credits;
+        let creditHtml = '';
+        if (credits) {
+          const balance = credits.balance;
+          const numeric = balance !== null && balance !== undefined && balance !== '' && typeof balance !== 'boolean' && Number.isFinite(Number(balance));
+          const text = credits.unlimited === true ? '无上限' : numeric ? String(balance) : '目前无法获取';
+          creditHtml = `<div class="group-section"><div class="group-title">Codex Credits</div><div>${escapeHtml(text)}</div>${provenance(credits)}</div>`;
         }
-
-        html += `
-            <div class="card-footer">
-              ${!isActive ? `<button class="btn-switch" onclick="switchChatgptAccount('${email}')">设为主力</button>` : '<span style="color:var(--primary);font-size:11px;">● 当前主力</span>'}
-              <button class="btn-card" onclick="deleteChatgptAccount('${email}')">移除账号</button>
-            </div>
-          </div>
-        `;
-      }
-
-      html += '</div>';
-      area.innerHTML = html;
+        const web = item.chatgpt_web_quota || {};
+        const webWindows = windowEntries(web);
+        return `<article class="account-card ${item.isActive ? 'active-account' : ''}">${cardHeader(item,false)}${renderPool(item.rate_limits || {},'Codex 共享额度 · 单模型额度未提供',true)}${(item.additional_rate_limits || []).map(pool => renderPool(pool,pool.name || pool.model_id || pool.id || '专属额度池')).join('')}${creditHtml}<div class="group-section"><div class="group-title">ChatGPT 网页独立额度</div>${web.status === 'available' && webWindows.length ? webWindows.map(w => renderWindow(w)).join('') : `<div class="quota-meta">目前无法获取：${escapeHtml(web.reason || '当前授权未提供可靠的网页端独立额度数据。Codex 共享额度不代表网页模型对话额度。')}</div>`}</div>${item.models && item.models.length ? renderModelsSection(item.models,'codex-'+index) : ''}${cardFooter(item,index,'codex')}</article>`;
+      }).join('')+'</div>';
+      updateGlobalFilterUI(); bindCardActions();
     }
 
     // ChatGPT Modal 逻辑
@@ -1561,7 +1374,9 @@
       area.innerHTML = '<div class="loading-state">正在查询最新 Google 配额状态...</div>';
       try {
         const res = await fetch(`/quota/api/quota?refresh=${forceRefresh ? 'true' : 'false'}`);
+        if (!res.ok) throw new Error(`额度接口返回 HTTP ${res.status}`);
         const data = await res.json();
+        if (currentTab !== "google") return;
         if (Array.isArray(data) && data.length > 0) {
           renderGoogleCards(data);
         } else {
@@ -1570,136 +1385,19 @@
           renderGoogleCards(statusData.accounts || []);
         }
       } catch (err) {
-        area.innerHTML = `<div class="empty-state" style="color: var(--danger);">加载 Google 数据失败：${err.message}</div>`;
+        area.innerHTML = `<div class="empty-state" style="color: var(--danger);">加载 Google 数据失败：${escapeHtml(err.message)}</div>`;
       }
     }
 
     function renderGoogleCards(items) {
-      lastRenderedGoogleItems = items || [];
-      const area = document.getElementById("contentArea");
-      if (items.length === 0) {
-        area.innerHTML = `
-          <div class="empty-state">
-            <h3>尚未绑定任何 Google 账号</h3>
-            <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
-              点击右上角「添加谷歌账号」，完成 Google 官方授权即可查看配额。
-            </p>
-            <button class="btn btn-primary" onclick="openAddModal()">立即添加</button>
-          </div>
-        `;
-        return;
+      lastRenderedGoogleItems = Array.isArray(items) ? items : [];
+      const area = document.getElementById('contentArea');
+      if (!lastRenderedGoogleItems.length) {
+        area.innerHTML = '<div class="empty-state"><h3>尚未绑定任何 Google 账号</h3><p>点击右上角“添加谷歌账号”完成官方授权。</p><button class="btn btn-primary" onclick="openAddModal()">立即添加</button></div>';
+        updateGlobalFilterUI(); return;
       }
-
-      let html = '<div class="account-grid">';
-      for (const item of items) {
-        const email = item.email || "未命名账号";
-        const isActive = Boolean(item.isActive);
-        const groups = item.groups || [];
-        const isError = item.status === "error";
-
-        html += `
-          <div class="account-card ${isActive ? 'active-account' : ''}">
-            <div class="card-header">
-              <div>
-                <div class="account-email">${email}</div>
-                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
-                  ${item.tier || 'Google AI Pro'}
-                </div>
-              </div>
-              <span class="badge ${isActive ? 'badge-active' : 'badge-normal'}">
-                ${isActive ? '活跃账号' : '待命'}
-              </span>
-            </div>
-        `;
-
-        if (isError) {
-          html += `
-            <div style="padding: 12px; background: rgba(239, 68, 68, 0.1); border-radius: 8px; color: var(--danger); font-size: 12px; margin: 10px 0;">
-              获取异常: ${item.error || 'Token可能已失效'}
-            </div>
-          `;
-        } else if (groups.length > 0) {
-          for (const g of groups) {
-            // 解析 5小时与周额度对象 (支持新结构与旧结构平滑兼容)
-            const fiveHourObj = g.fiveHour || {
-              percentage: g.percentage !== undefined ? g.percentage : 100,
-              resetTime: g.resetTime || ""
-            };
-            const weeklyObj = g.weekly;
-
-            const fhPct = (fiveHourObj.percentage !== undefined && fiveHourObj.percentage !== null) ? fiveHourObj.percentage : 100;
-            const fhColor = getColor(fhPct);
-            const fhCountdown = formatCountdown(fiveHourObj.resetTime);
-
-            let weeklyHtml = "";
-            if (weeklyObj && weeklyObj.percentage !== undefined && weeklyObj.percentage !== null) {
-              const wkPct = weeklyObj.percentage;
-              const wkColor = getColor(wkPct);
-              const wkCountdown = formatCountdown(weeklyObj.resetTime);
-              weeklyHtml = `
-                <div style="border-top: 1px solid rgba(255, 255, 255, 0.05); margin: 8px 0; padding-top: 8px;"></div>
-                <div class="limit-row">
-                  <div>
-                    <div class="limit-label">Weekly Limit Remaining</div>
-                    <div class="limit-sub">周窗口重置: ${wkCountdown ? wkCountdown : '已就绪'}</div>
-                  </div>
-                  <div class="limit-value-box">
-                    <span class="limit-pct" style="color: ${wkColor};">${wkPct}%</span>
-                    <div class="ring-indicator" style="border-color: ${wkColor};"></div>
-                  </div>
-                </div>
-              `;
-            } else {
-              weeklyHtml = `
-                <div style="border-top: 1px solid rgba(255, 255, 255, 0.05); margin: 8px 0; padding-top: 8px;"></div>
-                <div class="limit-row">
-                  <div>
-                    <div class="limit-label">Weekly Limit Remaining</div>
-                    <div class="limit-sub">周窗口: 暂不可用 (单窗口回退模式)</div>
-                  </div>
-                  <div class="limit-value-box">
-                    <span class="limit-pct" style="color: var(--text-muted); font-size: 13px;">暂不可用</span>
-                  </div>
-                </div>
-              `;
-            }
-
-            html += `
-              <div class="group-section">
-                <div class="group-title">
-                  <span>${g.groupName}</span>
-                </div>
-                
-                <div class="limit-row">
-                  <div>
-                    <div class="limit-label">Five Hour Limit Remaining</div>
-                    <div class="limit-sub">重置倒计时: ${fhCountdown ? fhCountdown : '已就绪'}</div>
-                  </div>
-                  <div class="limit-value-box">
-                    <span class="limit-pct" style="color: ${fhColor};">${fhPct}%</span>
-                    <div class="ring-indicator" style="border-color: ${fhColor};"></div>
-                  </div>
-                </div>
-                ${weeklyHtml}
-              </div>
-            `;
-          }
-          // 主要模型用量监控面板
-          if (!isError && item.models && item.models.length > 0) {
-            html += renderModelsSection(item.models, 'g_' + email);
-          }
-        }
-
-        html += `
-            <div class="card-footer">
-              ${!isActive ? `<button class="btn-switch" onclick="switchAccount('${email}')">设为活跃</button>` : '<span style="color:var(--primary);font-size:11px;">● 当前主力</span>'}
-              <button class="btn-card" onclick="deleteAccount('${email}')">移除账号</button>
-            </div>
-          </div>
-        `;
-      }
-      html += '</div>';
-      area.innerHTML = html;
+      area.innerHTML = '<div class="account-grid">'+lastRenderedGoogleItems.map((item,index) => `<article class="account-card ${item.isActive ? 'active-account' : ''}">${cardHeader(item,true)}${(item.groups || []).map(g => renderPool(g,g.groupName || g.id || '额度组',true)).join('') || '<div class="quota-meta">组额度目前无法获取。</div>'}<div class="quota-meta">路由降级状态：${escapeHtml(item.degradation?.status === 'confirmed' ? '已确认' : '未知')} · ${escapeHtml(item.degradation?.reason || '缺少可靠的路由降级证据')}</div>${renderModelsSection(item.models,'google-'+index)}${cardFooter(item,index,'google')}</article>`).join('')+'</div>';
+      updateGlobalFilterUI(); bindCardActions();
     }
 
     // Google Modal 与 认证操作
@@ -1794,39 +1492,21 @@
     // ==================== 通用辅助函数 ====================
 
     function getColor(pct) {
+      if (pct === null || pct === undefined) return "var(--text-muted)";
       if (pct > 50) return "var(--success)";
       if (pct > 20) return "var(--warning)";
       return "var(--danger)";
     }
 
     function formatCountdown(resetTimeStr) {
-      if (!resetTimeStr) return "";
-      try {
-        let resetDate;
-        if (typeof resetTimeStr === "number") {
-          resetDate = new Date(resetTimeStr > 1e11 ? resetTimeStr : resetTimeStr * 1000);
-        } else if (!isNaN(Number(resetTimeStr)) && resetTimeStr.trim() !== "") {
-          const num = Number(resetTimeStr);
-          resetDate = new Date(num > 1e11 ? num : num * 1000);
-        } else {
-          resetDate = new Date(resetTimeStr);
-        }
-        const diffMs = resetDate.getTime() - Date.now();
-        if (isNaN(diffMs)) return "";
-        if (diffMs <= 0) return "即将重置";
-        const totalMinutes = Math.floor(diffMs / 60000);
-        const hours = Math.floor(totalMinutes / 60);
-        const mins = totalMinutes % 60;
-        if (hours > 24) {
-          const days = Math.floor(hours / 24);
-          const remHours = hours % 24;
-          return `${days}天 ${remHours}小时`;
-        }
-        if (hours > 0) return `${hours}小时 ${mins}分`;
-        return `${mins}分钟`;
-      } catch (e) {
-        return "";
-      }
+      const resetDate = dateValue(resetTimeStr);
+      if (!resetDate) return '';
+      const diffMs = resetDate.getTime() - Date.now();
+      if (diffMs <= 0) return '重置时间已过，等待接口更新';
+      const minutes = Math.floor(diffMs / 60000);
+      const hours = Math.floor(minutes / 60);
+      if (hours >= 24) return `${Math.floor(hours/24)}天 ${hours%24}小时`;
+      return hours ? `${hours}小时 ${minutes%60}分` : `${minutes}分钟`;
     }
 
     // ==================== 主题切换 (浅色 / 暗色模式) ====================

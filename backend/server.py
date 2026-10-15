@@ -8,11 +8,38 @@ import subprocess
 import base64
 import secrets
 import hashlib
+import copy
+import threading
+try:
+    from . import quota_parsing as parsing
+except ImportError:
+    import quota_parsing as parsing
+
+CODEX_SOURCE = parsing.CODEX_SOURCE
+GOOGLE_SUMMARY_SOURCE = parsing.GOOGLE_SUMMARY_SOURCE
+GOOGLE_MODELS_SOURCE = parsing.GOOGLE_MODELS_SOURCE
+utc_now = parsing.utc_now
+aggregate_status = parsing.aggregate_status
+data_status = parsing.data_status
+mark_stale = parsing.mark_stale
+model_metadata = parsing.model_metadata
+# Public parser aliases preserve imports used by existing tools and integrations.
+normalize_reset_time = parsing.normalize_reset_time
+parse_single_codex_window = parsing.parse_single_codex_window
+parse_codex_rate_limits = parsing.parse_codex_rate_limits
+format_model_entry = parsing.format_model_entry
+extract_primary_models = parsing.extract_primary_models
+parse_quota_summary = parsing.parse_quota_summary
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI(title="Antigravity & Codex Quota API")
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "schema_version": 2}
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,13 +85,16 @@ OPENAI_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
 # 企业微信推送配置
 WX_CORP_ID = os.environ.get("WX_CORP_ID", "YOUR_WECHAT_CORP_ID")
 WX_SECRET = os.environ.get("WX_SECRET", "YOUR_WECHAT_SECRET")
-WX_AGENT_ID = 1000002
+WX_AGENT_ID = int(os.environ.get("WX_AGENT_ID", "1000002"))
 
 ANTIGRAVITY_DEBUG = os.environ.get("ANTIGRAVITY_DEBUG", "false").lower() in ("true", "1", "yes")
 CODEX_QUOTA_DEBUG = os.environ.get("CODEX_QUOTA_DEBUG", "false").lower() in ("true", "1", "yes")
 
 # 临时存放 PKCE code_verifier 的内存字典 {state: (code_verifier, timestamp)}
 PKCE_CACHE = {}
+GOOGLE_PKCE_CACHE = {}
+OAUTH_LOCK = threading.Lock()
+CACHE_SCHEMA_VERSION = 2
 
 class PasteUrlRequest(BaseModel):
     url: str
@@ -86,26 +116,14 @@ def load_quota_cache():
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # 兼容旧缓存格式升级
-                if isinstance(data, dict):
-                    for email, entry in data.items():
-                        if isinstance(entry, dict) and "groups" in entry:
-                            for g in entry["groups"]:
-                                if "fiveHour" not in g:
-                                    old_pct = g.get("percentage")
-                                    old_rst = g.get("resetTime", "")
-                                    g["fiveHour"] = {
-                                        "percentage": old_pct,
-                                        "resetTime": old_rst
-                                    } if old_pct is not None else None
-                                    g["weekly"] = None
-                return data
+                return data if isinstance(data, dict) else {}
         except Exception:
             pass
     return {}
 
 def save_quota_cache(cache_data):
     try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache_data, f, indent=2)
     except Exception:
@@ -129,7 +147,7 @@ def refresh_account_token(acc: dict) -> str:
     }).encode("utf-8")
     
     req = urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=15) as resp:
         res = json.loads(resp.read().decode("utf-8"))
         new_token = res["access_token"]
         expires_in = res.get("expires_in", 3600)
@@ -137,466 +155,86 @@ def refresh_account_token(acc: dict) -> str:
         acc["expiresAt"] = now_ms + (expires_in * 1000)
         return new_token
 
-CC_BLACKLIST = {
-    "chat_20706",
-    "chat_23310",
-    "tab_flash_lite_preview",
-    "tab_jump_flash_lite_preview",
-}
-
-# 核心主力路由模型定义（精选代表性主力模型，避免重复刷屏）
-PRIMARY_ROUTED_SPECS = [
-    ("gemini-3.8-flash-tiered", "Google", "Tiered", "Tiered 主力"),
-    ("gemini-3.6-flash-high",   "Google", "High",   "High 高推理"),
-    ("gemini-3.1-pro-high",     "Google", "High",   "High 高推理"),
-    ("claude-sonnet-4-6",       "Anthropic", "Thinking", "Thinking"),
-    ("claude-opus-4-6-thinking", "Anthropic", "Thinking", "Thinking"),
-    ("gpt-oss-120b-medium",     "OpenAI", "Medium", "Medium"),
-]
-
-def format_model_entry(key: str, val: dict, spec_tier: str = "", spec_tag: str = "") -> dict:
-    q_info = val.get("quotaInfo") or {}
-    rem = q_info.get("remainingFraction")
-    if rem is not None:
-        try:
-            pct = max(0, min(100, int(round(float(rem) * 100))))
-        except (ValueError, TypeError):
-            pct = 100
-    else:
-        pct = 100
-    reset_time = q_info.get("resetTime") or ""
-    used = (pct < 100)
-
-    if "claude" in key:
-        provider = "Anthropic"
-    elif "gpt" in key or "openai" in key:
-        provider = "OpenAI"
-    else:
-        provider = "Google"
-
-    tier = spec_tier or ""
-    tag_label = spec_tag or ""
-    if not tier:
-        if "-tiered" in key:
-            tier = "Tiered"
-            tag_label = "Tiered"
-        elif "-high" in key:
-            tier = "High"
-            tag_label = "High"
-        elif "-medium" in key:
-            tier = "Medium"
-            tag_label = "Medium"
-        elif "-extra-low" in key:
-            tier = "Low"
-            tag_label = "Extra-Low"
-        elif "-low" in key:
-            tier = "Low"
-            tag_label = "Low"
-        elif "-thinking" in key:
-            tier = "Thinking"
-            tag_label = "Thinking"
-        elif "-agent" in key:
-            tier = "Agent"
-            tag_label = "Agent"
-        elif "-lite" in key:
-            tier = "Lite"
-            tag_label = "Lite"
-        elif "claude" in key:
-            tier = "Thinking"
-            tag_label = "Thinking"
-
-    display_name = val.get("displayName") or key
-
-    return {
-        "id": key,                      # 真实后端路由模型原始 ID (如 gemini-3.8-flash-tiered)
-        "name": key,                    # 统一保持原始 ID
-        "displayName": display_name,    # 官方展示名称
-        "provider": provider,           # Google / Anthropic / OpenAI
-        "tier": tier,                   # Tier 级别
-        "tagLabel": tag_label,          # 徽章文本
-        "remainingPercent": pct,
-        "resetTime": reset_time,
-        "used": used,
-        "isPrimary": True
-    }
-
-def extract_primary_models(models_data: dict, fallback_groups: list = None) -> list:
-    """
-    提取真实后端路由模型 (保留完整 gemini-3.8-flash-tiered / gemini-3.6-flash-high 等后缀标识)
-    """
-    extracted = []
-    seen = set()
-
-    # 1. 优先提取核心主力模型
-    for spec in PRIMARY_ROUTED_SPECS:
-        key, provider, spec_tier, spec_tag = spec
-        matched_k = None
-        if key in models_data:
-            matched_k = key
-        else:
-            prefix = key.rsplit('-', 1)[0]
-            for k in models_data.keys():
-                if k.startswith(prefix) and k not in seen:
-                    matched_k = k
-                    break
-        if matched_k and matched_k in models_data and matched_k not in seen:
-            seen.add(matched_k)
-            entry = format_model_entry(matched_k, models_data[matched_k], spec_tier, spec_tag)
-            entry["isPrimary"] = True
-            extracted.append(entry)
-
-    # 2. 如果账号没有 3.8 或 3.6-high，检测是否有降级模型（如 gemini-3.6-flash-low 或 gemini-3.5-flash-extra-low）
-    has_flash = any("flash" in e["id"] for e in extracted)
-    if not has_flash:
-        for deg_key in ["gemini-3.6-flash-low", "gemini-3.5-flash-extra-low", "gemini-3.5-flash-low"]:
-            if deg_key in models_data and deg_key not in seen:
-                seen.add(deg_key)
-                entry = format_model_entry(deg_key, models_data[deg_key], "Low", "Low 降级")
-                entry["isPrimary"] = True
-                extracted.insert(0, entry)
-                break
-
-    # 3. 如果接口未返回模型列表或受限，基于全局分组 quota 智能推导兜底
-    if not extracted and fallback_groups:
-        gemini_pct = 100
-        gemini_rst = ""
-        claude_pct = 100
-        claude_rst = ""
-        for g in fallback_groups:
-            g_name = g.get("groupName", "")
-            fh = g.get("fiveHour") or {}
-            if "Gemini" in g_name:
-                gemini_pct = fh.get("percentage", 100)
-                gemini_rst = fh.get("resetTime", "")
-            elif "Claude" in g_name or "GPT" in g_name:
-                claude_pct = fh.get("percentage", 100)
-                claude_rst = fh.get("resetTime", "")
-
-        fallback_specs = [
-            ("gemini-3.8-flash-tiered", "Google", "Tiered", "Tiered 主力", gemini_pct, gemini_rst),
-            ("gemini-3.6-flash-high",   "Google", "High",   "High 高推理", gemini_pct, gemini_rst),
-            ("gemini-3.1-pro-high",     "Google", "High",   "High 高推理", gemini_pct, gemini_rst),
-            ("claude-sonnet-4-6",       "Anthropic", "Thinking", "Thinking", claude_pct, claude_rst),
-            ("claude-opus-4-6-thinking", "Anthropic", "Thinking", "Thinking", claude_pct, claude_rst),
-            ("gpt-oss-120b-medium",     "OpenAI", "Medium", "Medium", claude_pct, claude_rst),
-        ]
-        for fid, fprov, ftier, ftag, fpct, frst in fallback_specs:
-            extracted.append({
-                "id": fid,
-                "name": fid,
-                "displayName": fid,
-                "provider": fprov,
-                "tier": ftier,
-                "tagLabel": ftag,
-                "remainingPercent": fpct,
-                "resetTime": frst,
-                "used": (fpct < 100),
-                "isPrimary": True
-            })
-
-    return extracted
-
-def fetch_primary_models_probe(access_token: str, project_id: str = "aicode-consumers", fallback_groups: list = None) -> list:
-    url = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-        "User-Agent": "antigravity"
-    }
-    body = json.dumps({"project": project_id} if project_id else {}).encode()
+def fetch_primary_models_probe(access_token: str, project_id: str = "aicode-consumers", fallback_groups: list = None):
+    req = urllib.request.Request(GOOGLE_MODELS_SOURCE,
+        data=json.dumps({"project": project_id} if project_id else {}).encode(),
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json", "User-Agent": "antigravity"})
     try:
-        req = urllib.request.Request(url, data=body, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
-            res = json.loads(resp.read().decode("utf-8"))
-            models_data = res.get("models", {})
-            return extract_primary_models(models_data, fallback_groups)
-    except Exception as e:
-        if ANTIGRAVITY_DEBUG:
-            print(f"[Antigravity Debug] fetch_primary_models_probe failed: {e}")
-    return extract_primary_models({}, fallback_groups)
-
-def fetch_single_probe(access_token: str, project_id: str = "aicode-consumers"):
-    url = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-        "User-Agent": "antigravity"
-    }
-    body = json.dumps({"project": project_id}).encode()
-    req = urllib.request.Request(url, data=body, headers=headers)
-    with urllib.request.urlopen(req, timeout=12) as resp:
-        res = json.loads(resp.read().decode("utf-8"))
-        models_data = res.get("models", {})
-        
-        m_gemini = models_data.get("gemini-3.8-flash-tiered") or models_data.get("gemini-3.8-flash") or models_data.get("gemini-pro-agent") or models_data.get("gemini-3.1-pro-high")
-        if not m_gemini:
-            for k in ["gemini-3.6-flash-high", "gemini-3.5-flash-high", "gemini-3-flash"]:
-                if k in models_data:
-                    m_gemini = models_data[k]
-                    break
-                    
-        m_claude = models_data.get("claude-sonnet-4-6") or models_data.get("claude-opus-4-6-thinking")
-        
-        g_rem = 1.0
-        g_rst = ""
-        if m_gemini and m_gemini.get("quotaInfo"):
-            g_rem = m_gemini["quotaInfo"].get("remainingFraction", 1.0)
-            g_rst = m_gemini["quotaInfo"].get("resetTime", "")
-            
-        c_rem = 1.0
-        c_rst = ""
-        if m_claude and m_claude.get("quotaInfo"):
-            c_rem = m_claude["quotaInfo"].get("remainingFraction", 1.0)
-            c_rst = m_claude["quotaInfo"].get("resetTime", "")
-            
-        models_list = extract_primary_models(models_data)
-        return g_rem, g_rst, c_rem, c_rst, models_list
-
-def parse_quota_summary(summary_data: dict):
-    """
-    解析 retrieveUserQuotaSummary 真实返回结构：
-    groups: [
-      {
-        "displayName": "Gemini Models",
-        "description": "...",
-        "buckets": [
-          { "bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.508, "resetTime": "..." },
-          { "bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.616, "resetTime": "..." }
-        ]
-      }
-    ]
-    """
-    raw_groups = summary_data.get("groups", [])
-    if not raw_groups:
+            data = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("models"), dict):
+            return None
+        return extract_primary_models(data["models"])
+    except Exception:
         return None
 
-    parsed_groups = []
-    for g in raw_groups:
-        display_name = g.get("displayName") or g.get("groupName") or "AI Models"
-        description = g.get("description") or ""
-        
-        # 兼容并精准识别子池名字
-        if "Gemini" in display_name:
-            sub_title = "Gemini 3.8 Flash (主力) / 3.1 Pro"
-        elif "Claude" in display_name or "GPT" in display_name or "3p" in display_name:
-            sub_title = "Claude Sonnet 4.6 / Opus / GPT-OSS"
-        else:
-            sub_title = description or display_name
 
-        five_hour_info = None
-        weekly_info = None
+def fetch_single_probe(access_token: str, project_id: str = "aicode-consumers"):
+    # Compatibility wrapper: no representative model may stand in for a group.
+    models = fetch_primary_models_probe(access_token, project_id)
+    if models is None:
+        raise RuntimeError("fetchAvailableModels unavailable")
+    return None, "", None, "", models
 
-        buckets = g.get("buckets", [])
-        for b in buckets:
-            b_id = str(b.get("bucketId", "")).lower()
-            window = str(b.get("window", "")).lower()
-            disp = str(b.get("displayName", "")).lower()
-
-            rem_frac = b.get("remainingFraction")
-            # 严格注意：0.0 是合法数值，表示额度耗尽！
-            if rem_frac is not None:
-                try:
-                    pct = max(0, min(100, int(round(float(rem_frac) * 100))))
-                except (ValueError, TypeError):
-                    pct = None
-            else:
-                pct = None
-
-            reset_time = b.get("resetTime") or ""
-
-            # 判断是 5 小时窗口还是周窗口
-            is_weekly = (
-                "week" in b_id or "7d" in b_id or "seven" in b_id or
-                "weekly" in window or "week" in window or "7d" in window or
-                "week" in disp
-            )
-            is_five_hour = (
-                "5h" in b_id or "five" in b_id or
-                "5h" in window or "five_hour" in window or "five" in window or
-                "5-hour" in disp or "five hour" in disp
-            )
-
-            if is_weekly:
-                weekly_info = {
-                    "percentage": pct if pct is not None else 100,
-                    "resetTime": reset_time
-                }
-            elif is_five_hour:
-                five_hour_info = {
-                    "percentage": pct if pct is not None else 100,
-                    "resetTime": reset_time
-                }
-            else:
-                # 若未明确标注，若已经有 5H 则归为 weekly，反之亦然
-                if five_hour_info is None:
-                    five_hour_info = {
-                        "percentage": pct if pct is not None else 100,
-                        "resetTime": reset_time
-                    }
-                elif weekly_info is None:
-                    weekly_info = {
-                        "percentage": pct if pct is not None else 100,
-                        "resetTime": reset_time
-                    }
-
-        # 兼容传统字段：percentage 优先取 5H，次之 weekly
-        legacy_pct = None
-        legacy_rst = ""
-        if five_hour_info is not None and five_hour_info["percentage"] is not None:
-            legacy_pct = five_hour_info["percentage"]
-            legacy_rst = five_hour_info["resetTime"]
-        elif weekly_info is not None and weekly_info["percentage"] is not None:
-            legacy_pct = weekly_info["percentage"]
-            legacy_rst = weekly_info["resetTime"]
-
-        parsed_groups.append({
-            "groupName": display_name,
-            "subTitle": sub_title,
-            "percentage": legacy_pct if legacy_pct is not None else 100,
-            "resetTime": legacy_rst,
-            "fiveHour": five_hour_info,
-            "weekly": weekly_info
-        })
-
-    return parsed_groups if parsed_groups else None
 
 def fetch_quota_summary(access_token: str, project_id: str = "aicode-consumers"):
-    """
-    优先调用 retrieveUserQuotaSummary 获取 grouped quota summary (5H + Weekly)
-    尝试探测优先级：
-    1. cloudcode-pa.googleapis.com (带 project 参数)
-    2. cloudcode-pa.googleapis.com (空参数体 {}) -> 实际官方无 403 阻断的轻量调用
-    3. daily-cloudcode-pa.sandbox.googleapis.com (测试沙箱备选)
-    """
-    endpoints_to_try = [
-        ("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", {"project": project_id} if project_id else {}),
-        ("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", {}),
-        ("https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary", {"project": project_id} if project_id else {}),
-    ]
-
-    last_error = None
-    for url, payload in endpoints_to_try:
+    for payload in ([{"project": project_id}, {}] if project_id else [{}]):
+        req = urllib.request.Request(GOOGLE_SUMMARY_SOURCE, data=json.dumps(payload).encode(),
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json", "User-Agent": "antigravity"})
         try:
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-                "User-Agent": "antigravity/1.104.0"
-            }
-            body = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(url, data=body, headers=headers)
             with urllib.request.urlopen(req, timeout=10) as resp:
-                res = json.loads(resp.read().decode("utf-8"))
-                parsed = parse_quota_summary(res)
-                if parsed:
-                    if ANTIGRAVITY_DEBUG:
-                        print(f"[Antigravity Debug] retrieveUserQuotaSummary succeeded via {url} (payload: {list(payload.keys())})")
-                        for g in parsed:
-                            fh = g.get('fiveHour') or {}
-                            wk = g.get('weekly') or {}
-                            print(f"  Group: {g.get('groupName')} | 5H: {fh.get('percentage')}% ({fh.get('resetTime')}) | Weekly: {wk.get('percentage')}% ({wk.get('resetTime')})")
-                    return parsed
-        except urllib.error.HTTPError as e:
-            last_error = f"HTTP {e.code}"
-            if ANTIGRAVITY_DEBUG:
-                print(f"[Antigravity Debug] retrieveUserQuotaSummary attempt failed: {url} (HTTP {e.code})")
-        except Exception as e:
-            last_error = str(e)
-            if ANTIGRAVITY_DEBUG:
-                print(f"[Antigravity Debug] retrieveUserQuotaSummary attempt error: {url} ({e})")
-
-    print(f"[Antigravity] retrieveUserQuotaSummary failed: {last_error}")
+                parsed = parse_quota_summary(json.loads(resp.read().decode("utf-8")))
+            if parsed:
+                return parsed
+        except Exception:
+            continue
     return None
 
-def fetch_grouped_quota(email: str, access_token: str, project_id: str = "aicode-consumers", force_refresh: bool = False):
+
+def google_quota_snapshot(email, access_token, project_id="aicode-consumers", force_refresh=False):
     cache = load_quota_cache()
+    cached = cache.get(email, {})
+    if cached.get("schema_version") != CACHE_SCHEMA_VERSION:
+        cached = {}  # Legacy snapshots may contain invented models and percentages.
     now = time.time()
-    
-    if not force_refresh and email in cache:
-        c_entry = cache[email]
-        if now - c_entry.get("timestamp", 0) < 180:
-            return c_entry.get("groups", []), c_entry.get("models", [])
-
-    # 第一级：尝试 retrieveUserQuotaSummary 获取真正的 5H + Weekly 额度
-    summary_groups = fetch_quota_summary(access_token, project_id)
-    if summary_groups:
-        models_list = fetch_primary_models_probe(access_token, project_id, fallback_groups=summary_groups)
-        cache[email] = {
-            "timestamp": now,
-            "groups": summary_groups,
-            "models": models_list
-        }
+    if not force_refresh and now - cached.get("timestamp", 0) < 180:
+        return copy.deepcopy(cached["data"])
+    groups = fetch_quota_summary(access_token, project_id)
+    models = fetch_primary_models_probe(access_token, project_id)
+    fetched = utc_now()
+    if groups is None and models is None:
+        if cached.get("data"):
+            result = mark_stale(cached["data"])
+            result["error"] = "实时接口不可用，正在展示历史快照"
+            result["last_attempt_at"] = fetched
+            return result
+        return {"groups": [], "models": [], "status": "unavailable", "stale": False,
+                "source": [GOOGLE_SUMMARY_SOURCE, GOOGLE_MODELS_SOURCE], "fetched_at": fetched,
+                "error": "无法获取真实额度或模型列表", "degradation": {"status": "unknown", "reason": "缺少可靠路由证据"}}
+    # Summary owns group quotas, model endpoint owns model quotas. Never copy one into the other.
+    result = {"groups": groups or [], "models": models or [],
+              "source": [GOOGLE_SUMMARY_SOURCE] if groups else [], "fetched_at": fetched, "stale": False,
+              "status": aggregate_status((groups or []) + (models or [])) if groups or models else "unavailable",
+              "degradation": {"status": "unknown", "reason": "缺少可靠的路由降级证据"},
+              "sources": {"summary": "available" if groups is not None else "unavailable",
+                          "models": "available" if models is not None else "unavailable"}}
+    if models is not None:
+        result["source"].append(GOOGLE_MODELS_SOURCE)
+    # Partial failures retain only the failed source's verified history, explicitly stale.
+    for key, fresh in (("groups", groups), ("models", models)):
+        if fresh is None and cached.get("data", {}).get(key):
+            result[key] = mark_stale(cached["data"][key])
+            result["stale"] = True
+            result["status"] = "stale"
+    if not result["stale"]:
+        cache[email] = {"schema_version": CACHE_SCHEMA_VERSION, "timestamp": now, "data": result}
         save_quota_cache(cache)
-        return summary_groups, models_list
+    return result
 
-    # 第二级：retrieveUserQuotaSummary 失败，自动回退到现有 fetchAvailableModels (5H 探测，Weekly 为 null)
-    if ANTIGRAVITY_DEBUG:
-        print(f"[Antigravity Debug] Falling back to fetchAvailableModels for {email}")
-        
-    best_g_rem, best_g_rst = None, ""
-    best_c_rem, best_c_rst = None, ""
-    best_models = []
-    
-    probe_projects = [project_id] if project_id else ["aicode-consumers", ""]
-    success = False
-    
-    for p in probe_projects:
-        try:
-            g_rem, g_rst, c_rem, c_rst, m_list = fetch_single_probe(access_token, p)
-            if g_rem is not None:
-                if best_g_rem is None or g_rem > best_g_rem:
-                    best_g_rem, best_g_rst = g_rem, g_rst
-            if c_rem is not None:
-                if best_c_rem is None or c_rem > best_c_rem:
-                    best_c_rem, best_c_rst = c_rem, c_rst
-            if m_list:
-                best_models = m_list
-            success = True
-        except Exception as e:
-            if ANTIGRAVITY_DEBUG:
-                print(f"[Antigravity Debug] fetchAvailableModels probe failed for project '{p}': {e}")
-            continue
-            
-    # 第三级：两个接口均失败，若有缓存则返回最近一次成功数据
-    if not success and email in cache:
-        return cache[email].get("groups", []), cache[email].get("models", [])
-        
-    g_final_pct = int(round(best_g_rem * 100)) if best_g_rem is not None else 0
-    c_final_pct = int(round(best_c_rem * 100)) if best_c_rem is not None else 0
-    
-    groups = [
-        {
-            "groupName": "Gemini Models",
-            "subTitle": "Gemini 3.8 Flash (主力) / 3.1 Pro",
-            "percentage": g_final_pct,
-            "resetTime": best_g_rst,
-            "fiveHour": {
-                "percentage": g_final_pct,
-                "resetTime": best_g_rst
-            },
-            "weekly": None
-        },
-        {
-            "groupName": "Claude and GPT models",
-            "subTitle": "Claude Sonnet 4.6 / Opus / GPT-OSS",
-            "percentage": c_final_pct,
-            "resetTime": best_c_rst,
-            "fiveHour": {
-                "percentage": c_final_pct,
-                "resetTime": best_c_rst
-            },
-            "weekly": None
-        }
-    ]
-    if not best_models:
-        best_models = extract_primary_models({}, fallback_groups=groups)
 
-    cache[email] = {
-        "timestamp": now,
-        "groups": groups,
-        "models": best_models
-    }
-    save_quota_cache(cache)
-    return groups, best_models
+def fetch_grouped_quota(email: str, access_token: str, project_id: str = "aicode-consumers", force_refresh: bool = False):
+    result = google_quota_snapshot(email, access_token, project_id, force_refresh)
+    return result["groups"], result["models"]
 
 # ==================== ChatGPT Plus / Codex 个人账号模块 ====================
 
@@ -632,7 +270,7 @@ def extract_chatgpt_account_info(access_token: str, id_token: str = "") -> dict:
     info = {
         "email": "",
         "name": "",
-        "plan_type": "plus",
+        "plan_type": "unknown",
         "chatgpt_account_id": "",
         "chatgpt_user_id": "",
         "expires_at": 0
@@ -720,388 +358,73 @@ def save_chatgpt_cache(data):
     except Exception:
         pass
 
-def normalize_reset_time(raw_val, window_seconds: int = 0) -> str:
-    """
-    统一将 reset_at / reset_after_seconds / timestamp 转换为 ISO 8601 UTC 字符串
-    """
-    if not raw_val and not window_seconds:
-        return ""
-    try:
-        now = time.time()
-        # 纯数字判断
-        if isinstance(raw_val, (int, float)):
-            ts = float(raw_val)
-            # 若大于 1e11 则为毫秒
-            if ts > 1e11:
-                ts = ts / 1000.0
-            return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).isoformat()
-        elif isinstance(raw_val, str) and raw_val.strip() != "":
-            val_str = raw_val.strip()
-            # 可能是数字字符串
-            if val_str.replace(".", "", 1).isdigit():
-                ts = float(val_str)
-                if ts > 1e11:
-                    ts = ts / 1000.0
-                return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).isoformat()
-            # 尝试 ISO 解析
-            try:
-                dt = datetime.datetime.fromisoformat(val_str.replace("Z", "+00:00"))
-                return dt.astimezone(datetime.timezone.utc).isoformat()
-            except Exception:
-                return val_str
-        elif window_seconds > 0:
-            # 只有 window_seconds 没有明确 reset_at
-            return datetime.datetime.fromtimestamp(now + window_seconds, tz=datetime.timezone.utc).isoformat()
-    except Exception as e:
-        if CODEX_QUOTA_DEBUG:
-            print(f"[Codex Debug] normalize_reset_time error for {raw_val}: {e}")
-    return ""
-
-def parse_single_codex_window(win_data: dict) -> dict:
-    """
-    解析单个 rate_limit 窗口结构：
-    {
-      "used_percent": 15,
-      "limit_window_seconds": 18000,
-      "reset_after_seconds": 12000,
-      "reset_at": 1790000000
-    }
-    """
-    if not isinstance(win_data, dict):
-        return None
-        
-    used_pct = win_data.get("used_percent")
-    # 严格区分 None 与 0.0！0 是合法值
-    if used_pct is not None:
-        try:
-            used_pct = max(0, min(100, int(round(float(used_pct)))))
-            rem_pct = max(0, min(100, 100 - used_pct))
-        except (ValueError, TypeError):
-            used_pct = 0
-            rem_pct = 100
-    else:
-        used_pct = 0
-        rem_pct = 100
-
-    win_sec = win_data.get("limit_window_seconds")
-    if win_sec is not None:
-        try:
-            win_sec = int(win_sec)
-        except (ValueError, TypeError):
-            win_sec = 0
-    else:
-        win_sec = 0
-
-    reset_raw = win_data.get("reset_at")
-    reset_after = win_data.get("reset_after_seconds")
-    if reset_after and not reset_raw:
-        try:
-            reset_raw = time.time() + float(reset_after)
-        except Exception:
-            pass
-
-    reset_iso = normalize_reset_time(reset_raw, win_sec)
-
-    return {
-        "used_percent": used_pct,
-        "remaining_percent": rem_pct,
-        "reset_at": reset_iso,
-        "window_seconds": win_sec
-    }
-
-def parse_codex_rate_limits(data: dict):
-    """
-    解析 wham/usage 整体返回结构中的 primary/secondary 窗口及额外额度池
-    支持 18000 秒 (5小时) 与 604800 秒 (7天周额度)
-    """
-    rate_limits = {
-        "five_hour": None,
-        "weekly": None
-    }
-    additional_rate_limits = []
-    credits_info = None
-
-    if not isinstance(data, dict):
-        return rate_limits, additional_rate_limits, credits_info
-
-    # 1. 寻找主 rate_limit 容器
-    rl_container = data.get("rate_limit") or data.get("rate_limits") or {}
-
-    # 候选窗口列表
-    candidate_windows = []
-    if isinstance(rl_container, dict):
-        for k in ["primary_window", "secondary_window", "primary", "secondary"]:
-            if k in rl_container and isinstance(rl_container[k], dict):
-                candidate_windows.append(rl_container[k])
-
-    # 兼容旧格式直接放在 data 根层级的 five_hour / weekly
-    if "five_hour" in data and isinstance(data["five_hour"], dict):
-        w = dict(data["five_hour"])
-        if "limit_window_seconds" not in w:
-            w["limit_window_seconds"] = 18000
-        candidate_windows.append(w)
-        
-    if "weekly" in data and isinstance(data["weekly"], dict):
-        w = dict(data["weekly"])
-        if "limit_window_seconds" not in w:
-            w["limit_window_seconds"] = 604800
-        candidate_windows.append(w)
-
-    # 如果 rate_limit 自身带有 used_percent（极端极简结构）
-    if not candidate_windows and "used_percent" in rl_container:
-        candidate_windows.append(rl_container)
-
-    # 遍历候选窗口并按 limit_window_seconds 精准归类
-    for w in candidate_windows:
-        parsed_w = parse_single_codex_window(w)
-        if not parsed_w:
+def codex_result(data, acc):
+    rate_limits, additional, credits = parse_codex_rate_limits(data)
+    five, week = rate_limits["five_hour"], rate_limits["weekly"]
+    models = []
+    for pool in additional:
+        # Feature pools have no implied model; only explicit model IDs create models.
+        if not pool.get("model_id"):
             continue
-        sec = parsed_w["window_seconds"]
-        # 5小时窗口: 18000 秒 (容差 3600 秒)
-        if abs(sec - 18000) <= 3600 or (sec == 0 and rate_limits["five_hour"] is None):
-            if rate_limits["five_hour"] is None:
-                rate_limits["five_hour"] = parsed_w
-        # 7天周额度窗口: 604800 秒 (容差 7200 秒)
-        elif abs(sec - 604800) <= 7200:
-            if rate_limits["weekly"] is None:
-                rate_limits["weekly"] = parsed_w
-        else:
-            # 其他时间长度窗口，优先填补未满的槽位
-            if rate_limits["five_hour"] is None and sec < 86400:
-                rate_limits["five_hour"] = parsed_w
-            elif rate_limits["weekly"] is None:
-                rate_limits["weekly"] = parsed_w
+        model_id = pool["model_id"]
+        target = pool["five_hour"] or pool["weekly"] or next(iter(pool["windows"]), {})
+        remaining = target.get("remaining_percent")
+        models.append(dict(model_metadata(model_id, {}), id=model_id, name=model_id, rawModelId=model_id,
+            displayName=pool["name"], remainingPercent=remaining, resetTime=target.get("reset_at", ""),
+            used=None if remaining is None else remaining < 100, isPrimary=True, tagLabel="专属模型额度",
+            status=data_status(remaining), source=CODEX_SOURCE, fetched_at=pool["fetched_at"], stale=False,
+            windows=pool["windows"]))
+    fetched = utc_now()
+    return {"success": True, "status": aggregate_status(rate_limits["windows"] + additional),
+            "plan": data.get("plan_type") or acc.get("plan", "unknown"), "email": acc.get("email", "unknown"),
+            "rate_limits": rate_limits, "additional_rate_limits": additional, "credits": credits,
+            "five_hour_remaining": five["remaining_percent"] if five else None,
+            "five_hour_reset": five["reset_at"] if five else "",
+            "seven_day_remaining": week["remaining_percent"] if week else None,
+            "seven_day_reset": week["reset_at"] if week else "", "models": models,
+            "fetched_at": fetched, "updated_at": fetched, "source": CODEX_SOURCE, "stale": False,
+            "rate_limit_reached_type": data.get("rate_limit_reached_type"),
+            "chatgpt_web_quota": {"status": "unavailable", "reason": "当前授权来源未提供可可靠读取的网页端独立额度"}}
 
-    # 2. 解析 additional_rate_limits
-    raw_add = data.get("additional_rate_limits") or []
-    if isinstance(raw_add, list):
-        for item in raw_add:
-            if not isinstance(item, dict):
-                continue
-            item_name = item.get("name") or item.get("id") or "额外模型额度"
-            item_rl = item.get("rate_limit") or item
-            item_5h = None
-            item_wk = None
-            for k in ["primary_window", "secondary_window"]:
-                if k in item_rl and isinstance(item_rl[k], dict):
-                    pw = parse_single_codex_window(item_rl[k])
-                    if pw:
-                        if abs(pw["window_seconds"] - 18000) <= 3600:
-                            item_5h = pw
-                        elif abs(pw["window_seconds"] - 604800) <= 7200:
-                            item_wk = pw
-            additional_rate_limits.append({
-                "id": item.get("id", ""),
-                "name": item_name,
-                "five_hour": item_5h,
-                "weekly": item_wk
-            })
-
-    # 3. 解析 credits
-    raw_cr = data.get("credits")
-    if isinstance(raw_cr, dict):
-        has_credits = raw_cr.get("has_credits", False)
-        unlimited = raw_cr.get("unlimited", False)
-        balance = raw_cr.get("balance")
-        credits_info = {
-            "has_credits": has_credits,
-            "unlimited": unlimited,
-            "balance": balance
-        }
-
-    return rate_limits, additional_rate_limits, credits_info
 
 def probe_chatgpt_quota(acc: dict, force_refresh: bool = False) -> dict:
-    """
-    通过 ChatGPT 官方 /backend-api/wham/usage 查询当前 Plus/Pro 账号的配额窗口
-    支持 60~90s 缓存控制、5H 与 7 天周额度准确解析、真实数据无假 100% 容灾
-    """
     email = acc.get("email") or "unknown"
     cache = load_chatgpt_cache()
-    now_sec = time.time()
-    
-    # 检查缓存有效性 (默认 75 秒有效)
-    if not force_refresh and email in cache:
-        entry = cache[email]
-        if now_sec - entry.get("timestamp", 0) < 75:
-            cached_res = dict(entry.get("data", {}))
-            cached_res["stale"] = False
-            return cached_res
-
-    token = refresh_chatgpt_account_token(acc)
-    account_id = acc.get("chatgptAccountId", "")
-    
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "User-Agent": "codex-cli",
-        "Accept": "application/json",
-        "Referer": "https://chatgpt.com/"
-    }
-    if account_id:
-        headers["ChatGPT-Account-Id"] = account_id
-
-    req_err = None
+    entry = cache.get(email, {})
+    if entry.get("schema_version") != CACHE_SCHEMA_VERSION:
+        entry = {}
+    now = time.time()
+    if not force_refresh and now - entry.get("timestamp", 0) < 75:
+        return copy.deepcopy(entry["data"])
+    error, http_status = "网络或响应异常", None
     try:
-        req = urllib.request.Request("https://chatgpt.com/backend-api/wham/usage", headers=headers)
+        token = refresh_chatgpt_account_token(acc)
+        headers = {"Authorization": f"Bearer {token}", "User-Agent": "codex-cli", "Accept": "application/json"}
+        if acc.get("chatgptAccountId"):
+            headers["ChatGPT-Account-Id"] = acc["chatgptAccountId"]
+        req = urllib.request.Request(CODEX_SOURCE, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-
-            if CODEX_QUOTA_DEBUG:
-                print(f"[Codex Debug] wham usage raw payload for {email}:")
-                # 打印脱敏结构
-                plan_t = data.get("plan_type", "unknown")
-                rl_dbg = data.get("rate_limit", {})
-                windows_cnt = sum(1 for k in ["primary_window", "secondary_window"] if k in rl_dbg)
-                print(f"  Plan: {plan_t}, Windows count: {windows_cnt}")
-                for wk in ["primary_window", "secondary_window"]:
-                    if wk in rl_dbg:
-                        w_obj = rl_dbg[wk]
-                        print(f"    {wk}: win_sec={w_obj.get('limit_window_seconds')}, used={w_obj.get('used_percent')}, reset_at={w_obj.get('reset_at')}")
-
-            rate_limits, add_limits, credits_info = parse_codex_rate_limits(data)
-
-            # 提取 5H 与 7D 数据
-            fh = rate_limits.get("five_hour")
-            wk = rate_limits.get("weekly")
-
-            fh_rem = fh["remaining_percent"] if fh else None
-            fh_rst = fh["reset_at"] if fh else ""
-            wk_rem = wk["remaining_percent"] if wk else None
-            wk_rst = wk["reset_at"] if wk else ""
-
-            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            # 整理 Codex / ChatGPT Plus 主要模型列表
-            codex_models = [
-                {
-                    "id": "codex-gpt-5",
-                    "name": "codex-gpt-5",
-                    "displayName": "GPT-5 / Codex",
-                    "provider": "OpenAI",
-                    "tier": "Codex",
-                    "tagLabel": "Codex 主力",
-                    "remainingPercent": fh_rem if fh_rem is not None else 100,
-                    "resetTime": fh_rst or "",
-                    "used": (fh_rem is not None and fh_rem < 100),
-                    "isPrimary": True
-                }
-            ]
-            for alm in add_limits:
-                alm_target = alm.get("weekly") or alm.get("five_hour")
-                alm_rem = alm_target.get("remaining_percent", 100) if alm_target else 100
-                alm_id = alm.get("id", "preview-model")
-                alm_name = alm.get("name", alm_id)
-                codex_models.append({
-                    "id": alm_id,
-                    "name": alm_id,
-                    "displayName": alm_name,
-                    "provider": "OpenAI",
-                    "tier": "Preview",
-                    "tagLabel": "专属模型",
-                    "remainingPercent": alm_rem,
-                    "resetTime": alm_target.get("reset_at", "") if alm_target else "",
-                    "used": (alm_rem < 100),
-                    "isPrimary": True
-                })
-
-            result = {
-                "success": True,
-                "status": "active",
-                "plan": data.get("plan_type") or acc.get("plan", "plus"),
-                "email": email,
-                "rate_limits": rate_limits,
-                "additional_rate_limits": add_limits,
-                "credits": credits_info,
-                "five_hour_remaining": fh_rem,
-                "five_hour_reset": fh_rst,
-                "seven_day_remaining": wk_rem,
-                "seven_day_reset": wk_rst,
-                "models": codex_models,
-                "fetched_at": now_str,
-                "stale": False,
-                "updated_at": now_str
-            }
-
-            # 存入成功缓存
-            cache[email] = {
-                "timestamp": now_sec,
-                "data": result
-            }
-            save_chatgpt_cache(cache)
-            return result
-
-    except urllib.error.HTTPError as e:
-        req_err = f"HTTP {e.code}"
-        print(f"[Codex] wham usage HTTP error for {email}: {e.code}")
-        # 401 说明需要重新登录
-        if e.code == 401:
-            return {
-                "success": False,
-                "status": "error",
-                "error": "凭证已过期或无效，请重新登录/绑定 Token",
-                "email": email,
-                "plan": acc.get("plan", "plus"),
-                "stale": False,
-                "fetched_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-        # 429 说明达到速率上限！同时从返回 headers 中抓取 x-codex-* 重置倒计时
-        if e.code == 429:
-            sec_reset = e.headers.get("x-codex-secondary-reset-after-seconds") or e.headers.get("retry-after")
-            reset_ts = ""
-            if sec_reset and sec_reset.isdigit():
-                future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=int(sec_reset))
-                reset_ts = future.isoformat()
-            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            return {
-                "success": True,
-                "status": "limited",
-                "plan": acc.get("plan", "plus"),
-                "email": email,
-                "rate_limits": {
-                    "five_hour": {"remaining_percent": 0, "used_percent": 100, "reset_at": reset_ts, "window_seconds": 18000},
-                    "weekly": None
-                },
-                "additional_rate_limits": [],
-                "credits": None,
-                "five_hour_remaining": 0,
-                "five_hour_reset": reset_ts,
-                "seven_day_remaining": None,
-                "seven_day_reset": "",
-                "error": "当前账号 5 小时额度已耗尽 (429 Rate Limit)",
-                "fetched_at": now_str,
-                "stale": False,
-                "updated_at": now_str
-            }
-    except Exception as ex:
-        req_err = str(ex)
-        print(f"[Codex] unexpected usage payload or network error for {email}: {ex}")
-
-    # 异常处理：绝对不伪造 100%！如果有缓存，返回带 stale=True 的缓存
-    if email in cache:
-        cached_res = dict(cache[email].get("data", {}))
-        cached_res["stale"] = True
-        cached_res["error"] = f"当前无法获取实时额度 ({req_err})，展示历史有效快照"
-        return cached_res
-
-    # 既无实时又无缓存：返回 unavailable
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return {
-        "success": False,
-        "status": "unavailable",
-        "error": f"无法获取当前 Codex 实时额度 ({req_err})",
-        "email": email,
-        "plan": acc.get("plan", "plus"),
-        "five_hour_remaining": None,
-        "five_hour_reset": "",
-        "seven_day_remaining": None,
-        "seven_day_reset": "",
-        "rate_limits": {"five_hour": None, "weekly": None},
-        "additional_rate_limits": [],
-        "credits": None,
-        "stale": False,
-        "fetched_at": now_str,
-        "updated_at": now_str
-    }
+        if not isinstance(data, dict) or not any(k in data for k in ("rate_limit", "rate_limits", "additional_rate_limits", "credits", "five_hour", "weekly")):
+            raise ValueError("Missing quota structure")
+        result = codex_result(data, acc)
+        cache[email] = {"schema_version": CACHE_SCHEMA_VERSION, "timestamp": now, "data": result}
+        save_chatgpt_cache(cache)
+        return result
+    except urllib.error.HTTPError as exc:
+        http_status = exc.code
+        error = {401: "凭证无效或已过期，请重新授权", 403: "当前授权无权读取额度", 429: "请求受到速率限制，无法确认限制窗口"}.get(exc.code, "上游服务异常")
+    except Exception:
+        # Never log response bodies, credential-bearing URLs or token exceptions.
+        pass
+    fetched = utc_now()
+    if entry.get("data"):
+        result = mark_stale(entry["data"])
+        result.update(error=error + "，展示历史快照", last_attempt_at=fetched, http_status=http_status)
+        return result
+    result = codex_result({}, acc)
+    result.update(success=False, status="unavailable", error=error, http_status=http_status)
+    return result
 
 # ==================== 接口路由 ====================
 
@@ -1112,16 +435,18 @@ def get_chatgpt_login_url():
     """生成官方 OpenAI Codex 授权登录链接 (带 PKCE code_challenge)"""
     # 清理过期 PKCE 缓存
     now = time.time()
-    for st in list(PKCE_CACHE.keys()):
-        if now - PKCE_CACHE[st][1] > 1800:
-            PKCE_CACHE.pop(st, None)
+    with OAUTH_LOCK:
+        for st in list(PKCE_CACHE.keys()):
+            if now - PKCE_CACHE[st][1] > 1800:
+                PKCE_CACHE.pop(st, None)
             
     code_verifier = secrets.token_hex(32)
     state = secrets.token_hex(16)
     challenge_bytes = hashlib.sha256(code_verifier.encode("ascii")).digest()
     code_challenge = base64.urlsafe_b64encode(challenge_bytes).decode("ascii").rstrip("=")
     
-    PKCE_CACHE[state] = (code_verifier, now)
+    with OAUTH_LOCK:
+        PKCE_CACHE[state] = (code_verifier, now)
     
     params = {
         "response_type": "code",
@@ -1146,23 +471,19 @@ def complete_chatgpt_oauth(req: SaveChatGPTAuthUrlRequest):
     parsed = urllib.parse.urlparse(req.url)
     params = urllib.parse.parse_qs(parsed.query)
     code = params.get("code", [None])[0]
-    state = params.get("state", [None])[0] or req.state
+    state = params.get("state", [None])[0]
     
     if not code:
         raise HTTPException(status_code=400, detail="未从粘贴的地址中提取到 authorization code")
         
-    code_verifier = ""
-    if state and state in PKCE_CACHE:
-        code_verifier = PKCE_CACHE[state][0]
-    else:
-        # 尝试遍历 PKCE 缓存中最年轻的 key
-        if PKCE_CACHE:
-            latest_k = sorted(PKCE_CACHE.keys(), key=lambda k: PKCE_CACHE[k][1], reverse=True)[0]
-            code_verifier = PKCE_CACHE[latest_k][0]
-            
-    if not code_verifier:
-        raise HTTPException(status_code=400, detail="登录会话已超时失效，请重新点击登录按钮！")
-        
+    if not state or (req.state and req.state != state):
+        raise HTTPException(status_code=400, detail="OAuth state 不匹配，请重新登录")
+    with OAUTH_LOCK:
+        session = PKCE_CACHE.pop(state, None)
+    if not session or time.time() - session[1] > 1800:
+        raise HTTPException(status_code=400, detail="OAuth state 无效或登录会话已过期")
+    code_verifier = session[0]
+
     post_data = urllib.parse.urlencode({
         "grant_type": "authorization_code",
         "client_id": OPENAI_OAUTH_CLIENT_ID,
@@ -1180,10 +501,9 @@ def complete_chatgpt_oauth(req: SaveChatGPTAuthUrlRequest):
         with urllib.request.urlopen(req_token, timeout=15) as resp:
             token_resp = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        err_msg = e.read().decode("utf-8", errors="ignore")
-        raise HTTPException(status_code=400, detail=f"OpenAI 换取 Token 失败: {err_msg}")
+        raise HTTPException(status_code=400, detail=f"OpenAI 换取 Token 失败 (HTTP {e.code})")
     except Exception as ex:
-        raise HTTPException(status_code=500, detail=f"请求 OpenAI 异常: {str(ex)}")
+        raise HTTPException(status_code=500, detail="请求 OpenAI 异常，请稍后重试")
         
     access_token = token_resp.get("access_token")
     id_token = token_resp.get("id_token", "")
@@ -1200,7 +520,7 @@ def complete_chatgpt_oauth(req: SaveChatGPTAuthUrlRequest):
     store["accounts"][email] = {
         "email": email,
         "name": info.get("name") or "ChatGPT Plus 会员",
-        "plan": info.get("plan_type") or "plus",
+        "plan": info.get("plan_type") or "unknown",
         "chatgptAccountId": info.get("chatgpt_account_id"),
         "chatgptUserId": info.get("chatgpt_user_id"),
         "accessToken": access_token,
@@ -1227,7 +547,7 @@ def save_chatgpt_session(req: SaveChatGPTSessionRequest):
     access_token = ""
     refresh_token = ""
     email = ""
-    plan = "plus"
+    plan = "unknown"
     chatgpt_account_id = ""
     
     # 尝试作为 JSON 解析（用户直接粘贴 chatgpt.com/api/auth/session 全文）
@@ -1261,7 +581,7 @@ def save_chatgpt_session(req: SaveChatGPTSessionRequest):
     store["accounts"][email] = {
         "email": email,
         "name": info.get("name") or "ChatGPT Plus 会员",
-        "plan": info.get("plan_type") or "plus",
+        "plan": info.get("plan_type") or "unknown",
         "chatgptAccountId": info.get("chatgpt_account_id") or chatgpt_account_id,
         "chatgptUserId": info.get("chatgpt_user_id"),
         "accessToken": access_token,
@@ -1290,7 +610,7 @@ def get_chatgpt_accounts():
         accs.append({
             "email": em,
             "name": a.get("name", ""),
-            "plan": a.get("plan", "plus"),
+            "plan": a.get("plan", "unknown"),
             "isActive": em == active_email,
             "hasRefreshToken": bool(a.get("refreshToken")),
             "addedAt": a.get("addedAt")
@@ -1406,7 +726,7 @@ def get_quota(refresh: bool = False):
         with open(TOKENS_FILE, "r", encoding="utf-8") as f:
             store = json.load(f)
     except Exception as e:
-        return {"error": f"读取凭证文件失败: {str(e)}"}
+        return {"error": "读取凭证文件失败"}
         
     accounts = store.get("accounts", {})
     active_email = store.get("activeEmail")
@@ -1418,33 +738,24 @@ def get_quota(refresh: bool = False):
             tok = refresh_account_token(acc)
             changed = True
         except Exception as e:
-            results.append({
+            entry = load_quota_cache().get(email, {})
+            snapshot = mark_stale(entry["data"]) if entry.get("schema_version") == CACHE_SCHEMA_VERSION and entry.get("data") else {
+                "groups": [], "models": [], "status": "unavailable", "stale": False,
+                "source": [GOOGLE_SUMMARY_SOURCE, GOOGLE_MODELS_SOURCE], "fetched_at": None}
+            results.append(dict(snapshot, **{
                 "email": email,
                 "isActive": email == active_email,
                 "projectId": acc.get("projectId", "aicode-consumers"),
-                "status": "error",
-                "error": str(e),
-                "groups": [],
-                "models": []
-            })
+                "error": "账号凭证刷新失败",
+                "last_attempt_at": utc_now()
+            }))
             continue
             
         proj = acc.get("projectId") or "aicode-consumers"
-        groups, models = fetch_grouped_quota(email, tok, proj, force_refresh=refresh)
-        
-        tier = "Google AI Pro"
-        if proj == "aicode-consumers":
-            tier = "Gemini Advanced / Ultra"
-            
-        results.append({
-            "email": email,
-            "isActive": email == active_email,
-            "projectId": proj,
-            "tier": tier,
-            "groups": groups,
-            "models": models
-        })
-        
+        snapshot = google_quota_snapshot(email, tok, proj, force_refresh=refresh)
+        results.append(dict(snapshot, email=email, isActive=email == active_email,
+                            projectId=proj, tier=acc.get("tier") or acc.get("plan") or "套餐未知"))
+
     if changed:
         try:
             with open(TOKENS_FILE, "w", encoding="utf-8") as f:
@@ -1456,7 +767,15 @@ def get_quota(refresh: bool = False):
 
 @app.get("/api/login-url")
 def get_login_url():
-    auth_params = {
+    now = time.time()
+    with OAUTH_LOCK:
+        for key in list(GOOGLE_PKCE_CACHE):
+            if now - GOOGLE_PKCE_CACHE[key][1] > 1800:
+                GOOGLE_PKCE_CACHE.pop(key, None)
+        state, verifier = secrets.token_urlsafe(24), secrets.token_urlsafe(48)
+        GOOGLE_PKCE_CACHE[state] = (verifier, now)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    auth_params = {"state": state, "code_challenge": challenge, "code_challenge_method": "S256",
         "client_id": CLIENT_ID,
         "redirect_uri": REDIRECT_URI,
         "response_type": "code",
@@ -1480,7 +799,14 @@ def complete_login(req: PasteUrlRequest):
         if not code:
             raise HTTPException(status_code=400, detail="未从 URL 中提取到授权 code 参数")
         
+        state = params.get("state", [None])[0]
+        with OAUTH_LOCK:
+            session = GOOGLE_PKCE_CACHE.pop(state, None) if state else None
+        if not session or time.time() - session[1] > 1800:
+            raise HTTPException(status_code=400, detail="OAuth state 无效或登录会话已过期")
+
         token_data = urllib.parse.urlencode({
+            "code_verifier": session[0],
             "client_id": CLIENT_ID,
             "client_secret": CLIENT_SECRET,
             "code": code,
@@ -1489,7 +815,7 @@ def complete_login(req: PasteUrlRequest):
         }).encode("utf-8")
         
         req_token = urllib.request.Request("https://oauth2.googleapis.com/token", data=token_data)
-        with urllib.request.urlopen(req_token) as resp:
+        with urllib.request.urlopen(req_token, timeout=15) as resp:
             token_resp = json.loads(resp.read().decode("utf-8"))
             
         access_token = token_resp["access_token"]
@@ -1500,7 +826,7 @@ def complete_login(req: PasteUrlRequest):
             "https://www.googleapis.com/oauth2/v2/userinfo",
             headers={"Authorization": f"Bearer {access_token}"}
         )
-        with urllib.request.urlopen(req_user) as resp_user:
+        with urllib.request.urlopen(req_user, timeout=15) as resp_user:
             user_info = json.loads(resp_user.read().decode("utf-8"))
             email = user_info.get("email")
             
@@ -1530,8 +856,10 @@ def complete_login(req: PasteUrlRequest):
             json.dump(store, f, indent=2)
             
         return {"success": True, "email": email, "message": f"账号 {email} 授权成功并已保存！"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="Google 授权请求失败，请重新登录或稍后重试")
 
 @app.post("/api/accounts/switch")
 def switch_account(req: SwitchAccountRequest):

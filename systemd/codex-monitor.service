@@ -5,11 +5,11 @@ After=network.target
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/home/ubuntu/codex-monitor
-ExecStart=/usr/bin/python3 /home/ubuntu/codex-monitor/codex_monitor.py
+WorkingDirectory=/opt/ai-quota-monitor
+EnvironmentFile=-/opt/ai-quota-monitor/.env
+ExecStart=/opt/ai-quota-monitor/.venv/bin/python /opt/ai-quota-monitor/daemon/codex_monitor.py
 Restart=always
 RestartSec=10
-Environment="CHECK_INTERVAL_SECONDS=180"
 
 [Install]
 WantedBy=multi-user.target

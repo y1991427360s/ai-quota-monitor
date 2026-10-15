@@ -7,3 +7,9 @@ tokens.json
 quota_cache.json
 *.bak*
 .DS_Store
+.venv/
+node_modules/
+output/playwright/
+test-results/
+playwright-report/
+output/

@@ -6,12 +6,12 @@ After=network.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/home/ubuntu/antigravity-quota-service
-ExecStart=/home/ubuntu/c4ai-venv/bin/uvicorn server:app --host 127.0.0.1 --port 3022
+WorkingDirectory=/opt/ai-quota-monitor
+EnvironmentFile=-/opt/ai-quota-monitor/.env
+ExecStart=/opt/ai-quota-monitor/.venv/bin/python -m uvicorn backend.server:app --host 127.0.0.1 --port 3022
 Restart=always
 RestartSec=5s
 Environment=PYTHONUNBUFFERED=1
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/ubuntu/.local/bin
 
 [Install]
 WantedBy=multi-user.target
