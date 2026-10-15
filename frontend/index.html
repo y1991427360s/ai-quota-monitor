@@ -90,7 +90,7 @@
 
     body {
       background-color: var(--bg);
-      background-image: 
+      background-image:
         radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
         radial-gradient(at 100% 100%, rgba(129, 140, 248, 0.12) 0px, transparent 50%);
       background-attachment: fixed;
@@ -948,7 +948,7 @@
     <div class="model-filters" aria-label="模型筛选">
       <input id="modelSearch" type="search" placeholder="搜索模型名称、系列或原始 ID" aria-label="搜索模型" oninput="modelSearch=this.value;rerenderCards()">
       <select id="modelProvider" aria-label="按 Provider 筛选" onchange="modelProvider=this.value;rerenderCards()"><option value="">全部 Provider</option></select>
-      
+
     </div>
     <!-- 容器内容 -->
     <div id="contentArea" aria-live="polite">
@@ -960,7 +960,7 @@
   <div class="modal-overlay" id="chatgptModal">
     <div class="modal">
       <div class="modal-title">登录 / 绑定 ChatGPT Plus 会员账号</div>
-      
+
       <div class="modal-subtabs">
         <button class="modal-subtab-btn active" id="subtabOauthBtn" onclick="switchChatgptMethod('oauth')">方式一：官方 OAuth 授权（推荐）</button>
         <button class="modal-subtab-btn" id="subtabTokenBtn" onclick="switchChatgptMethod('token')">方式二：直接粘贴 Token / Session</button>

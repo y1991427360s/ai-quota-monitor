@@ -9,4 +9,3 @@
 名称和元数据从接口读取；未知后缀保留在原始 ID 中，不与已有型号合并。不要根据公开 Gemini API 模型清单推造 Antigravity 路由。运行旧后端目录布局时，将 config 放到后端源码目录内（优先）或上级 config/；缺失配置会使用安全默认排序，额度不受影响。
 
 `.env.example` 提供 Google OAuth 和企业微信参数。OpenAI OAuth 的官方客户端配置沿用现有实现；生产 Token 仅保存于运行用户家目录。CHECK_INTERVAL_SECONDS 为告警轮询秒数，WX_AGENT_ID 是推送应用 ID，后台与守护进程共用相同配置。
-
